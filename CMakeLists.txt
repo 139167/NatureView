@@ -130,5 +130,29 @@ if(BUILD_TESTING)
             COMMAND natureview_metal --smoke --frames 3 --width 480 --height 270
         )
         set_tests_properties(metal_scene_smoke PROPERTIES TIMEOUT 30)
+
+        add_test(
+            NAME metal_scene_capture
+            COMMAND natureview_metal
+                --frames 1
+                --seconds 30
+                --width 320
+                --height 180
+                --capture ${CMAKE_CURRENT_BINARY_DIR}/metal-scene.ppm
+        )
+        set_tests_properties(metal_scene_capture PROPERTIES
+            FIXTURES_SETUP metal_scene_image
+            TIMEOUT 30
+        )
+
+        add_executable(metal_capture_tests tests/metal_capture_tests.cpp)
+        add_test(
+            NAME metal_capture_tests
+            COMMAND metal_capture_tests
+                ${CMAKE_CURRENT_BINARY_DIR}/metal-scene.ppm
+        )
+        set_tests_properties(metal_capture_tests PROPERTIES
+            FIXTURES_REQUIRED metal_scene_image
+        )
     endif()
 endif()

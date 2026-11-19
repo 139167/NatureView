@@ -1,3 +1,4 @@
+#include <cmath>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -9,7 +10,7 @@ namespace {
 
 void printUsage(std::ostream& output) {
     output << "Usage: natureview_metal [--smoke] [--frames N] "
-              "[--width N] [--height N]\n";
+              "[--seconds N] [--width N] [--height N] [--capture FILE.ppm]\n";
 }
 
 }  // namespace
@@ -41,6 +42,10 @@ int main(int argc, char** argv) {
                 options.width = static_cast<std::uint32_t>(std::stoul(argv[++index]));
             } else if (argument == "--height") {
                 options.height = static_cast<std::uint32_t>(std::stoul(argv[++index]));
+            } else if (argument == "--seconds") {
+                options.prewarmSeconds = std::stod(argv[++index]);
+            } else if (argument == "--capture") {
+                options.capturePath = argv[++index];
             } else {
                 std::cerr << "Unknown argument: " << argument << '\n';
                 return 2;
@@ -49,6 +54,16 @@ int main(int argc, char** argv) {
             std::cerr << "Invalid value for " << argument << '\n';
             return 2;
         }
+    }
+
+    if (!std::isfinite(options.prewarmSeconds) ||
+        options.prewarmSeconds < 0.0 ||
+        options.prewarmSeconds > 3600.0) {
+        std::cerr << "--seconds must be between 0 and 3600\n";
+        return 2;
+    }
+    if (!options.capturePath.empty() && options.frameLimit == 0) {
+        options.frameLimit = 1;
     }
 
     try {

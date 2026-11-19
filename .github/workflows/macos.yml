@@ -21,3 +21,11 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+      - name: Upload Metal capture
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: metal-scene
+          path: build/metal-scene.ppm
+          if-no-files-found: warn

@@ -73,6 +73,16 @@ cmake --build build --parallel
 
 不带 `--frames` 时窗口持续运行，关闭窗口退出。`.github/workflows/macos.yml` 会执行 Metal smoke 测试。当前 shader 在运行时编译；正式管线后续改用预编译 metallib。
 
+捕获视频渲染器的实际像素：
+
+```sh
+./build/natureview_metal --frames 1 --seconds 60 \
+  --width 960 --height 540 --capture build/metal-frame.ppm
+```
+
+捕获文件会由结构化 PPM 测试检查尺寸、颜色变化、植被和天空/水面区域。
+捕获尺寸使用物理像素；Retina 屏幕会按 backing scale 放大。
+
 ## 结构
 
 ```text

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -18,6 +19,7 @@
 #include "metal_shaders.hpp"
 #include "nature/core/math.hpp"
 #include "nature/core/simulation.hpp"
+#include "nature/render/preview_renderer.hpp"
 #include "nature/render/render_scene.hpp"
 
 namespace natureview::platform {
@@ -239,6 +241,40 @@ void drainEvents() {
     }
 }
 
+bool writeCapturePpm(
+    const std::filesystem::path& path,
+    id<MTLBuffer> captureBuffer,
+    NSUInteger width,
+    NSUInteger height,
+    NSUInteger bytesPerRow) {
+    if (captureBuffer == nil || width == 0 || height == 0) {
+        return false;
+    }
+
+    PreviewImage image;
+    image.width = static_cast<int>(width);
+    image.height = static_cast<int>(height);
+    image.pixels.resize(static_cast<std::size_t>(width) * height);
+    const auto* bytes =
+        static_cast<const std::uint8_t*>(captureBuffer.contents);
+    for (NSUInteger row = 0; row < height; ++row) {
+        const std::uint8_t* source = bytes + row * bytesPerRow;
+        for (NSUInteger column = 0; column < width; ++column) {
+            const std::uint8_t* pixel = source + column * 4;
+            image.pixels[static_cast<std::size_t>(row) * width + column] = {
+                pixel[2],
+                pixel[1],
+                pixel[0],
+            };
+        }
+    }
+
+    if (!path.parent_path().empty()) {
+        std::filesystem::create_directories(path.parent_path());
+    }
+    return writePpm(path, image);
+}
+
 id<MTLTexture> createDepthTexture(
     id<MTLDevice> device,
     NSUInteger width,
@@ -284,6 +320,12 @@ int runMetalApp(const MetalAppOptions& options) {
             createPipeline(device, colorFormat, depthFormat);
 
         NatureSimulation simulation(139167);
+        constexpr double simulationFramesPerSecond = 60.0;
+        const int prewarmFrames = static_cast<int>(
+            std::ceil(options.prewarmSeconds * simulationFramesPerSecond));
+        for (int frame = 0; frame < prewarmFrames; ++frame) {
+            simulation.advance(1.0 / simulationFramesPerSecond);
+        }
         const RenderScene scene = buildRenderScene(simulation.world());
         const CombinedMesh mesh = combineMesh(scene);
         id<MTLBuffer> vertexBuffer = [device
@@ -319,7 +361,7 @@ int runMetalApp(const MetalAppOptions& options) {
         CAMetalLayer* metalLayer = [CAMetalLayer layer];
         metalLayer.device = device;
         metalLayer.pixelFormat = colorFormat;
-        metalLayer.framebufferOnly = YES;
+        metalLayer.framebufferOnly = options.capturePath.empty() ? YES : NO;
         metalLayer.maximumDrawableCount = 2;
 
         NSView* contentView = [window contentView];
@@ -332,6 +374,10 @@ int runMetalApp(const MetalAppOptions& options) {
         dispatch_semaphore_t inFlight = dispatch_semaphore_create(2);
         id<MTLTexture> depthTexture = nil;
         id<MTLCommandBuffer> lastCommandBuffer = nil;
+        id<MTLBuffer> captureBuffer = nil;
+        NSUInteger capturedBytesPerRow = 0;
+        NSUInteger capturedWidth = 0;
+        NSUInteger capturedHeight = 0;
         std::uint32_t renderedFrames = 0;
         bool failed = false;
         auto previousFrameTime = std::chrono::steady_clock::now();
@@ -344,9 +390,12 @@ int runMetalApp(const MetalAppOptions& options) {
                 }
 
                 const auto currentFrameTime = std::chrono::steady_clock::now();
-                const double deltaSeconds = std::min(
-                    std::chrono::duration<double>(currentFrameTime - previousFrameTime).count(),
-                    0.25);
+                const double deltaSeconds = options.frameLimit == 0
+                    ? std::min(
+                          std::chrono::duration<double>(
+                              currentFrameTime - previousFrameTime).count(),
+                          0.25)
+                    : (renderedFrames == 0 ? 0.0 : 1.0 / 60.0);
                 previousFrameTime = currentFrameTime;
                 simulation.advance(deltaSeconds);
 
@@ -455,6 +504,33 @@ int runMetalApp(const MetalAppOptions& options) {
                                                sizeof(std::uint32_t)];
                 [encoder endEncoding];
 
+                if (!options.capturePath.empty() &&
+                    renderedFrames + 1 == options.frameLimit) {
+                    capturedWidth = drawableWidth;
+                    capturedHeight = drawableHeight;
+                    capturedBytesPerRow = drawableWidth * 4;
+                    capturedBytesPerRow =
+                        (capturedBytesPerRow + 255U) & ~NSUInteger{255U};
+                    captureBuffer = [device
+                        newBufferWithLength:capturedBytesPerRow * drawableHeight
+                                   options:MTLResourceStorageModeShared];
+                    id<MTLBlitCommandEncoder> blit =
+                        [commandBuffer blitCommandEncoder];
+                    [blit copyFromTexture:drawable.texture
+                             sourceSlice:0
+                             sourceLevel:0
+                            sourceOrigin:MTLOriginMake(0, 0, 0)
+                              sourceSize:MTLSizeMake(
+                                             drawableWidth,
+                                             drawableHeight,
+                                             1)
+                                toBuffer:captureBuffer
+                       destinationOffset:0
+                  destinationBytesPerRow:capturedBytesPerRow
+                destinationBytesPerImage:capturedBytesPerRow * drawableHeight];
+                    [blit endEncoding];
+                }
+
                 [commandBuffer presentDrawable:drawable];
                 [commandBuffer addCompletedHandler:^(
                     __unused id<MTLCommandBuffer> completedBuffer) {
@@ -477,14 +553,32 @@ int runMetalApp(const MetalAppOptions& options) {
             }
         }
 
+        bool captureSucceeded = true;
+        if (!options.capturePath.empty()) {
+            captureSucceeded = writeCapturePpm(
+                options.capturePath,
+                captureBuffer,
+                capturedWidth,
+                capturedHeight,
+                capturedBytesPerRow);
+            if (!captureSucceeded) {
+                std::cerr << "Failed to capture Metal frame\n";
+                failed = true;
+            }
+        }
+
         std::cout << "metal_device=" << [[device name] UTF8String] << '\n'
                   << "rendered_frames=" << renderedFrames << '\n'
+                  << "simulation_seconds=" << simulation.elapsedSeconds() << '\n'
                   << "terrain_chunks=" << scene.terrainChunks.size() << '\n'
                   << "combined_vertices=" << mesh.vertices.size() << '\n'
                   << "combined_indices=" << mesh.indices.size() << '\n';
+        if (captureSucceeded && !options.capturePath.empty()) {
+            std::cout << "capture=" << options.capturePath << '\n';
+        }
         [window orderOut:nil];
 
-        if (failed || renderedFrames == 0) {
+        if (failed || renderedFrames == 0 || !captureSucceeded) {
             return 1;
         }
     }
