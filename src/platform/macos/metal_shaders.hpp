@@ -120,6 +120,26 @@ vertex SkyOut skyVertex(uint vertexID [[vertex_id]])
     return out;
 }
 
+float3 skyRadiance(
+    float3 ray,
+    float3 sunDirection,
+    float cloud,
+    float daylight)
+{
+    float elevation = saturate(ray.y);
+    float3 horizon = float3(0.16, 0.23, 0.32);
+    float3 zenith = float3(0.018, 0.065, 0.18);
+    float3 color = mix(horizon, zenith, pow(elevation, 0.62));
+    color *= mix(float3(0.010, 0.018, 0.035), float3(1.0), daylight);
+
+    float solar = saturate(dot(ray, sunDirection));
+    float halo = pow(solar, 32.0) * 0.35;
+    float disk = smoothstep(0.9992, 0.99975, solar) * 8.0;
+    color += float3(1.0, 0.67, 0.34) * (halo + disk) * daylight;
+    color *= 1.0 - cloud * 0.28;
+    return color;
+}
+
 fragment float4 skyFragment(
     SkyOut in [[stage_in]],
     constant Uniforms& uniforms [[buffer(1)]])
@@ -134,19 +154,8 @@ fragment float4 skyFragment(
     float3 ray = normalize(
         forward + right * (in.ndc.x * tangent * aspect) + up * (in.ndc.y * tangent));
 
-    float elevation = saturate(ray.y);
-    float3 horizon = float3(0.16, 0.23, 0.32);
-    float3 zenith = float3(0.018, 0.065, 0.18);
-    float3 color = mix(horizon, zenith, pow(elevation, 0.62));
-    color *= mix(float3(0.010, 0.018, 0.035), float3(1.0), daylight);
-
     float3 sunDirection = normalize(uniforms.sunDirection.xyz);
-    float solar = saturate(dot(ray, sunDirection));
-    float halo = pow(solar, 32.0) * 0.35;
-    float disk = smoothstep(0.9992, 0.99975, solar) * 8.0;
-    color += float3(1.0, 0.67, 0.34) * (halo + disk) * daylight;
-    color *= 1.0 - cloud * 0.28;
-
+    float3 color = skyRadiance(ray, sunDirection, cloud, daylight);
     return float4(color, 1.0);
 }
 
@@ -193,18 +202,60 @@ fragment float4 terrainFragment(
     float3 color;
 
     if (uniforms.settings.x > 0.5) {
+        float time = uniforms.settings.z;
+        float2 flowA = float2(
+            in.uv.x * 15.0,
+            in.uv.y * 420.0 - time * 1.35);
+        float2 flowB = float2(
+            in.uv.x * 7.0 + 4.0,
+            in.uv.y * 190.0 - time * 0.62);
+        float slopeX =
+            cos(flowA.x * 1.3 + flowA.y) * 0.080 +
+            cos(flowB.y * 1.7 - flowB.x) * 0.120;
+        float slopeZ =
+            sin(flowA.y * 1.6 - flowA.x) * 0.150 +
+            sin(flowB.x * 1.2 + flowB.y) * 0.220;
+        float footprint = max(
+            max(fwidth(flowA.x), fwidth(flowA.y)),
+            max(fwidth(flowB.x), fwidth(flowB.y)));
+        float detailFade = 1.0 - smoothstep(0.20, 0.90, footprint);
         float3 normal = normalize(float3(
-            sin(in.worldPosition.x * 0.075 + in.worldPosition.z * 0.052) * 0.035,
+            -slopeX * detailFade,
             1.0,
-            sin(in.worldPosition.z * 0.13 - in.worldPosition.x * 0.031) * 0.025));
-        float3 viewDirection = normalize(in.worldPosition - uniforms.cameraPosition.xyz);
+            -slopeZ * detailFade));
+
+        float3 viewDirection =
+            normalize(uniforms.cameraPosition.xyz - in.worldPosition);
         float3 reflected = reflect(viewDirection, normal);
-        float fresnel = pow(1.0 - saturate(abs(dot(viewDirection, normal))), 3.0);
-        float3 sky = mix(float3(0.42, 0.52, 0.62), float3(0.14, 0.28, 0.48),
-                         saturate(reflected.y));
-        float glint = pow(saturate(dot(reflected, sunDirection)), 160.0);
-        color = mix(float3(0.018, 0.085, 0.105), sky, 0.28 + fresnel * 0.62);
-        color += float3(1.0, 0.82, 0.56) * glint * 0.8;
+        float fresnel = 0.02 + 0.98 * pow(
+            1.0 - saturate(dot(viewDirection, normal)), 5.0);
+        float3 reflection = skyRadiance(
+            reflected,
+            sunDirection,
+            uniforms.skySettings.z,
+            uniforms.skySettings.w);
+
+        float edge = abs(in.uv.x * 2.0 - 1.0);
+        float depthVariation = fbm(float2(
+            in.uv.y * 70.0 - time * 0.25,
+            edge * 4.0));
+        float3 deepWater = float3(0.004, 0.018, 0.028);
+        float3 shallowWater = float3(0.018, 0.085, 0.095);
+        float3 water = mix(
+            deepWater,
+            shallowWater,
+            0.26 + depthVariation * 0.52);
+        color = mix(water, reflection, 0.16 + fresnel * 0.78);
+
+        float glint = pow(saturate(dot(reflected, sunDirection)), 260.0);
+        color += float3(1.0, 0.78, 0.46) * glint * 2.2;
+
+        float foamNoise = valueNoise(float2(
+            in.uv.x * 22.0,
+            in.uv.y * 330.0 - time * 1.8));
+        float foamBand =
+            smoothstep(0.76, 0.99, edge) * (0.28 + foamNoise * 0.72);
+        color = mix(color, float3(0.52, 0.60, 0.62), foamBand * 0.48);
     } else {
         float3 normal = normalize(in.normal);
         float2 ground = in.worldPosition.xz;
