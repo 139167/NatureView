@@ -111,6 +111,7 @@ WorldDefinition generateHeroWorld(std::uint64_t seed) {
     WorldDefinition world;
     world.seed = seed;
     world.sizeMeters = kWorldSizeMeters;
+    world.latitudeDegrees = 64.0F;
     world.resolution = kTerrainResolution;
     world.heights.resize(static_cast<std::size_t>(kTerrainResolution) * kTerrainResolution);
     world.river.resize(kRiverSampleCount);
@@ -163,6 +164,7 @@ WorldDefinition generateHeroWorld(std::uint64_t seed) {
 
     std::uint64_t fingerprint = kFnvOffset;
     hashCombine(fingerprint, seed);
+    hashCombine(fingerprint, world.latitudeDegrees);
     hashCombine(fingerprint, static_cast<std::uint64_t>(kTerrainResolution));
     for (const float height : world.heights) {
         hashCombine(fingerprint, height);

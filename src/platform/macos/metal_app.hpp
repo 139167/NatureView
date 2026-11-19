@@ -6,6 +6,7 @@
 namespace natureview::platform {
 
 struct MetalAppOptions {
+    std::uint64_t seed = 139167;
     std::uint32_t width = 1280;
     std::uint32_t height = 720;
     std::uint32_t frameLimit = 0;

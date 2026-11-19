@@ -18,11 +18,12 @@ struct EnvironmentState {
     float airTemperatureCelsius = 0.0F;
     float sunElevationDegrees = 0.0F;
     float sunAzimuthRadians = 0.0F;
+    float auroraActivity = 0.0F;
 };
 
 class EnvironmentModel {
 public:
-    explicit EnvironmentModel(std::uint64_t seed);
+    EnvironmentModel(std::uint64_t seed, float latitudeDegrees);
 
     void step(float fixedDeltaSeconds, double elapsedSeconds);
 
@@ -35,6 +36,7 @@ private:
     float phaseA_ = 0.0F;
     float phaseB_ = 0.0F;
     float phaseC_ = 0.0F;
+    float latitudeDegrees_ = 0.0F;
     float rainMemory_ = 0.0F;
     EnvironmentState state_{};
 };

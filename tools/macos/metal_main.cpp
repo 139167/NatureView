@@ -10,7 +10,8 @@ namespace {
 
 void printUsage(std::ostream& output) {
     output << "Usage: natureview_metal [--smoke] [--frames N] "
-              "[--seconds N] [--width N] [--height N] [--capture FILE.ppm]\n";
+              "[--seconds N] [--seed N] [--width N] [--height N] "
+              "[--capture FILE.ppm]\n";
 }
 
 }  // namespace
@@ -44,6 +45,8 @@ int main(int argc, char** argv) {
                 options.height = static_cast<std::uint32_t>(std::stoul(argv[++index]));
             } else if (argument == "--seconds") {
                 options.prewarmSeconds = std::stod(argv[++index]);
+            } else if (argument == "--seed") {
+                options.seed = std::stoull(argv[++index]);
             } else if (argument == "--capture") {
                 options.capturePath = argv[++index];
             } else {

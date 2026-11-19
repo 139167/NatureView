@@ -15,6 +15,7 @@ struct RiverSample {
 struct WorldDefinition {
     std::uint64_t seed = 0;
     float sizeMeters = 0.0F;
+    float latitudeDegrees = 64.0F;
     std::uint32_t resolution = 0;
     float waterLevelMeters = 0.0F;
     std::vector<float> heights;

@@ -13,7 +13,7 @@ constexpr std::uint64_t kFnvOffset = 1469598103934665603ULL;
 NatureSimulation::NatureSimulation(std::uint64_t seed)
     : world_(generateHeroWorld(seed)),
       cameraPath_(world_),
-      environment_(seed),
+      environment_(seed, world_.latitudeDegrees),
       camera_(cameraPath_.sample(0.0F)) {}
 
 void NatureSimulation::advance(double wallDeltaSeconds) {
@@ -61,6 +61,7 @@ std::uint64_t NatureSimulation::stateFingerprint() const {
     hashCombine(fingerprint, environment.airTemperatureCelsius);
     hashCombine(fingerprint, environment.sunElevationDegrees);
     hashCombine(fingerprint, environment.sunAzimuthRadians);
+    hashCombine(fingerprint, environment.auroraActivity);
 
     hashCombine(fingerprint, camera_.position.x);
     hashCombine(fingerprint, camera_.position.y);

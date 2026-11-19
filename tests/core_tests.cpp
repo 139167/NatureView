@@ -88,6 +88,8 @@ void testEnvironmentRangesAndContinuity() {
         expect(environment.riverDischargeCubicMetersPerSecond > 0.0F,
                "river discharge must stay positive");
         expect(std::isfinite(environment.sunAzimuthRadians), "sun azimuth must be finite");
+        expect(environment.auroraActivity >= 0.0F && environment.auroraActivity <= 1.0F,
+               "aurora activity must stay normalized");
 
         maximumCameraStep =
             std::max(maximumCameraStep, natureview::length(camera.position - previousCamera.position));

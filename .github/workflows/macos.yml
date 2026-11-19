@@ -26,6 +26,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: metal-scene
-          path: build/metal-scene.ppm
+          name: metal-frames
+          path: |
+            build/metal-scene.ppm
+            build/metal-night.ppm
           if-no-files-found: warn

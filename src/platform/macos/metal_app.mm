@@ -165,7 +165,7 @@ FrameUniforms frameUniforms(
     uniforms.settings[0] = material;
     uniforms.settings[1] = fogDensity;
     uniforms.settings[2] = static_cast<float>(simulation.elapsedSeconds());
-    uniforms.settings[3] = 0.0F;
+    uniforms.settings[3] = environment.auroraActivity;
 
     const Vec3 worldUp = {0.0F, 1.0F, 0.0F};
     const Vec3 right = normalize(cross(worldUp, camera.forward));
@@ -480,7 +480,7 @@ int runMetalApp(const MetalAppOptions& options) {
             return 1;
         }
 
-        NatureSimulation simulation(139167);
+        NatureSimulation simulation(options.seed);
         constexpr double simulationFramesPerSecond = 60.0;
         const int prewarmFrames = static_cast<int>(
             std::ceil(options.prewarmSeconds * simulationFramesPerSecond));
@@ -737,7 +737,12 @@ int runMetalApp(const MetalAppOptions& options) {
                     clamp(
                         (12.0F - simulation.environment().sunElevationDegrees) / 80.0F,
                         0.0F,
-                        0.12F);
+                        0.12F) +
+                    (1.0F - smoothstep(
+                                -4.0F,
+                                18.0F,
+                                simulation.environment().sunElevationDegrees)) *
+                        0.55F;
                 TonemapUniforms tonemapUniforms;
                 tonemapUniforms.exposure = exposure;
                 [compositeEncoder setFragmentBytes:&tonemapUniforms
@@ -812,6 +817,7 @@ int runMetalApp(const MetalAppOptions& options) {
         }
 
         std::cout << "metal_device=" << [[device name] UTF8String] << '\n'
+                  << "seed=" << options.seed << '\n'
                   << "rendered_frames=" << renderedFrames << '\n'
                   << "simulation_seconds=" << simulation.elapsedSeconds() << '\n'
                   << "terrain_chunks=" << scene.terrainChunks.size() << '\n'

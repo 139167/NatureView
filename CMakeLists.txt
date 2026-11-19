@@ -154,5 +154,29 @@ if(BUILD_TESTING)
         set_tests_properties(metal_capture_tests PROPERTIES
             FIXTURES_REQUIRED metal_scene_image
         )
+
+        add_test(
+            NAME metal_night_capture
+            COMMAND natureview_metal
+                --seed 22
+                --frames 1
+                --seconds 60
+                --width 320
+                --height 180
+                --capture ${CMAKE_CURRENT_BINARY_DIR}/metal-night.ppm
+        )
+        set_tests_properties(metal_night_capture PROPERTIES
+            FIXTURES_SETUP metal_night_image
+            TIMEOUT 30
+        )
+
+        add_test(
+            NAME metal_night_capture_tests
+            COMMAND metal_capture_tests
+                ${CMAKE_CURRENT_BINARY_DIR}/metal-night.ppm
+        )
+        set_tests_properties(metal_night_capture_tests PROPERTIES
+            FIXTURES_REQUIRED metal_night_image
+        )
     endif()
 endif()

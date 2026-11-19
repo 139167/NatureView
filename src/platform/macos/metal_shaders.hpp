@@ -124,12 +124,14 @@ float3 skyRadiance(
     float3 ray,
     float3 sunDirection,
     float cloud,
-    float daylight)
+    float daylight,
+    float auroraActivity,
+    float time)
 {
     float elevation = saturate(ray.y);
-    float3 horizon = float3(0.16, 0.23, 0.32);
+    float3 horizonColor = float3(0.16, 0.23, 0.32);
     float3 zenith = float3(0.018, 0.065, 0.18);
-    float3 color = mix(horizon, zenith, pow(elevation, 0.62));
+    float3 color = mix(horizonColor, zenith, pow(elevation, 0.62));
     color *= mix(float3(0.010, 0.018, 0.035), float3(1.0), daylight);
 
     float solar = saturate(dot(ray, sunDirection));
@@ -137,6 +139,60 @@ float3 skyRadiance(
     float disk = smoothstep(0.9992, 0.99975, solar) * 8.0;
     color += float3(1.0, 0.67, 0.34) * (halo + disk) * daylight;
     color *= 1.0 - cloud * 0.28;
+
+    float night = 1.0 - daylight;
+    float clear = 1.0 - smoothstep(0.35, 0.80, cloud);
+    float2 celestial = float2(
+        atan2(ray.x, ray.z),
+        asin(clamp(ray.y, -1.0, 1.0)));
+    float2 starGrid = celestial * float2(120.0, 64.0);
+    float2 starCell = floor(starGrid);
+    float2 starLocal = fract(starGrid) - 0.5;
+    float starHash = hash21(starCell);
+    float star =
+        smoothstep(0.996, 0.9995, starHash) *
+        (1.0 - smoothstep(0.02, 0.12, length(starLocal))) *
+        smoothstep(0.02, 0.18, ray.y);
+    star *= 0.72 + 0.28 * sin(time * 0.7 + starHash * 47.0);
+    color += float3(0.72, 0.82, 1.0) * star * night * clear * 0.55;
+
+    float2 auroraPlane = ray.xz / max(ray.y + 0.08, 0.06);
+    float azimuth = atan2(ray.x, ray.z);
+    float curtainNoise = fbm(float2(
+        azimuth * 1.8 + time * 0.006,
+        auroraPlane.y * 0.08 + 4.2));
+    float broadCurtain = smoothstep(
+        0.38,
+        0.78,
+        0.5 +
+            0.5 * sin(azimuth * 4.4 + curtainNoise * 3.2 + time * 0.012));
+    float ribbonDetail = fbm(float2(
+        azimuth * 18.0 + time * 0.018,
+        ray.y * 9.0 + 2.4));
+    float ribbonWave = 0.5 + 0.5 * sin(
+        azimuth * 24.0 +
+        fbm(float2(azimuth * 6.0 + time * 0.02, 7.0)) * 5.0 +
+        time * 0.018);
+    float ribbon = saturate(
+        pow(ribbonWave, 2.6) * (0.32 + ribbonDetail * 1.15) + 0.08);
+    float curtainTop = mix(
+        0.20,
+        0.52,
+        saturate(0.5 + 0.5 * sin(azimuth * 2.2 + curtainNoise + 0.7)));
+    float vertical =
+        smoothstep(0.012, 0.065, ray.y) *
+        (1.0 - smoothstep(curtainTop * 0.78, curtainTop, ray.y));
+    float2 horizontalDirection =
+        normalize(ray.xz + float2(0.0001, 0.0001));
+    float northMask = smoothstep(-0.35, 0.45, horizontalDirection.y);
+    float auroraMask =
+        broadCurtain * vertical * northMask * night * clear * auroraActivity *
+        ribbon;
+    float3 auroraColor = mix(
+        float3(0.04, 0.85, 0.38),
+        float3(0.34, 0.08, 0.72),
+        smoothstep(0.12, 0.64, ray.y));
+    color += auroraColor * auroraMask * 2.4;
     return color;
 }
 
@@ -155,7 +211,13 @@ fragment float4 skyFragment(
         forward + right * (in.ndc.x * tangent * aspect) + up * (in.ndc.y * tangent));
 
     float3 sunDirection = normalize(uniforms.sunDirection.xyz);
-    float3 color = skyRadiance(ray, sunDirection, cloud, daylight);
+    float3 color = skyRadiance(
+        ray,
+        sunDirection,
+        cloud,
+        daylight,
+        uniforms.settings.w,
+        uniforms.settings.z);
     return float4(color, 1.0);
 }
 
@@ -233,7 +295,9 @@ fragment float4 terrainFragment(
             reflected,
             sunDirection,
             uniforms.skySettings.z,
-            uniforms.skySettings.w);
+            uniforms.skySettings.w,
+            uniforms.settings.w,
+            time);
 
         float edge = abs(in.uv.x * 2.0 - 1.0);
         float depthVariation = fbm(float2(

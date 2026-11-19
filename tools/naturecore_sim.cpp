@@ -76,6 +76,7 @@ void printSnapshot(const natureview::NatureSimulation& simulation) {
               << ",\"river_discharge_m3ps\":"
               << environment.riverDischargeCubicMetersPerSecond
               << ",\"sun_elevation_deg\":" << environment.sunElevationDegrees
+              << ",\"aurora_activity\":" << environment.auroraActivity
               << ",\"camera\":{\"x\":" << camera.position.x
               << ",\"y\":" << camera.position.y
               << ",\"z\":" << camera.position.z

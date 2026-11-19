@@ -14,11 +14,12 @@ float seedUnit(std::uint64_t seed, std::uint64_t salt) {
 
 }  // namespace
 
-EnvironmentModel::EnvironmentModel(std::uint64_t seed)
+EnvironmentModel::EnvironmentModel(std::uint64_t seed, float latitudeDegrees)
     : startSolarTimeSeconds_(static_cast<double>(seedUnit(seed, 0x3c217ef9a804d5b1ULL)) * 86400.0),
       phaseA_(seedUnit(seed, 0xa93475d18c2f06e7ULL) * 2.0F * kPi),
       phaseB_(seedUnit(seed, 0x5d81e34bc790a2f9ULL) * 2.0F * kPi),
-      phaseC_(seedUnit(seed, 0x71f8c39d5ea2460bULL) * 2.0F * kPi) {
+      phaseC_(seedUnit(seed, 0x71f8c39d5ea2460bULL) * 2.0F * kPi),
+      latitudeDegrees_(latitudeDegrees) {
     step(0.0F, 0.0);
 }
 
@@ -73,6 +74,23 @@ void EnvironmentModel::step(float fixedDeltaSeconds, double elapsedSeconds) {
         3.0F * state_.cloudCover - 1.5F * state_.rainIntensity;
     state_.riverDischargeCubicMetersPerSecond =
         13.0F + 4.0F * std::sin(time * 0.0009F + phaseA_) + rainMemory_ * 18.0F;
+
+    const float nightFactor =
+        1.0F - smoothstep(-6.0F, 3.0F, state_.sunElevationDegrees);
+    const float clearSky =
+        1.0F - smoothstep(0.42F, 0.78F, state_.cloudCover);
+    const float latitudeFactor = 1.0F - clamp(
+        std::abs(latitudeDegrees_ - 67.0F) / 14.0F,
+        0.0F,
+        1.0F);
+    const float auroraSignal = clamp(
+        0.48F +
+            0.28F * std::sin(time * 0.0013F + phaseC_) +
+            0.18F * std::sin(time * 0.0031F + phaseA_ + 1.7F),
+        0.0F,
+        1.0F);
+    state_.auroraActivity =
+        clamp(nightFactor * clearSky * latitudeFactor * auroraSignal, 0.0F, 1.0F);
 }
 
 }  // namespace natureview
