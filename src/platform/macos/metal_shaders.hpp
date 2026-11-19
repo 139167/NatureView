@@ -156,43 +156,62 @@ float3 skyRadiance(
     star *= 0.72 + 0.28 * sin(time * 0.7 + starHash * 47.0);
     color += float3(0.72, 0.82, 1.0) * star * night * clear * 0.55;
 
-    float2 auroraPlane = ray.xz / max(ray.y + 0.08, 0.06);
     float azimuth = atan2(ray.x, ray.z);
-    float curtainNoise = fbm(float2(
-        azimuth * 1.8 + time * 0.006,
-        auroraPlane.y * 0.08 + 4.2));
-    float broadCurtain = smoothstep(
-        0.38,
-        0.78,
-        0.5 +
-            0.5 * sin(azimuth * 4.4 + curtainNoise * 3.2 + time * 0.012));
-    float ribbonDetail = fbm(float2(
-        azimuth * 18.0 + time * 0.018,
-        ray.y * 9.0 + 2.4));
-    float ribbonWave = 0.5 + 0.5 * sin(
-        azimuth * 24.0 +
-        fbm(float2(azimuth * 6.0 + time * 0.02, 7.0)) * 5.0 +
-        time * 0.018);
-    float ribbon = saturate(
-        pow(ribbonWave, 2.6) * (0.32 + ribbonDetail * 1.15) + 0.08);
-    float curtainTop = mix(
-        0.20,
-        0.52,
-        saturate(0.5 + 0.5 * sin(azimuth * 2.2 + curtainNoise + 0.7)));
     float vertical =
-        smoothstep(0.012, 0.065, ray.y) *
-        (1.0 - smoothstep(curtainTop * 0.78, curtainTop, ray.y));
+        smoothstep(0.012, 0.070, ray.y) *
+        (1.0 - smoothstep(0.62, 0.94, ray.y));
     float2 horizontalDirection =
         normalize(ray.xz + float2(0.0001, 0.0001));
     float northMask = smoothstep(-0.35, 0.45, horizontalDirection.y);
-    float auroraMask =
-        broadCurtain * vertical * northMask * night * clear * auroraActivity *
-        ribbon;
-    float3 auroraColor = mix(
-        float3(0.04, 0.85, 0.38),
-        float3(0.34, 0.08, 0.72),
-        smoothstep(0.12, 0.64, ray.y));
-    color += auroraColor * auroraMask * 2.4;
+    float3 auroraEmission = float3(0.0);
+    if (auroraActivity > 0.001 && night > 0.01 && clear > 0.01) {
+        constexpr int layerCount = 6;
+        for (int layer = 0; layer < layerCount; ++layer) {
+            float layerAmount =
+                (static_cast<float>(layer) + 0.5) / static_cast<float>(layerCount);
+            float planeHeight = 0.10 + layerAmount * 0.58;
+            float planeScale = min(
+                planeHeight / max(ray.y, 0.025),
+                80.0);
+            float2 plane = ray.xz * planeScale;
+
+            float warp = fbm(
+                plane * 0.055 +
+                float2(time * 0.004, layerAmount * 1.7));
+            float broadWave = 0.5 + 0.5 * sin(
+                azimuth * 4.1 +
+                warp * 3.4 +
+                layerAmount * 0.9 +
+                time * 0.011);
+            float broadCurtain = smoothstep(
+                0.42,
+                0.74,
+                broadWave * 0.72 + warp * 0.48);
+
+            float ribbonDetail = fbm(float2(
+                plane.x * 0.15 + time * 0.018,
+                plane.y * 0.10 - layerAmount * 2.3));
+            float ribbonWave = 0.5 + 0.5 * sin(
+                azimuth * 22.0 +
+                ribbonDetail * 7.0 +
+                layerAmount * 1.4 +
+                time * 0.017);
+            float ribbon = saturate(
+                pow(ribbonWave, 2.4) *
+                    (0.35 + ribbonDetail * 1.2) +
+                0.07);
+            float density =
+                broadCurtain * ribbon *
+                (1.0 - layerAmount * 0.42);
+            float3 layerColor = mix(
+                float3(0.035, 0.86, 0.36),
+                float3(0.36, 0.07, 0.74),
+                saturate(layerAmount * 0.82 + ray.y * 0.24));
+            auroraEmission += layerColor * density;
+        }
+    }
+    color += auroraEmission * vertical * northMask * night * clear *
+             auroraActivity * 0.78;
     return color;
 }
 
