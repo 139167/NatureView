@@ -52,7 +52,7 @@ ctest --test-dir build --output-on-failure
 Windows 构建会额外生成 `natureview_dx12_probe`。该探针只验证 DXGI 与 D3D12 设备初始化，优先选择硬件适配器，失败时回退 WARP。
 
 ```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake -S . -B build -A x64
 cmake --build build --config Release --parallel
 ctest --test-dir build -C Release --output-on-failure
 .\build\Release\natureview_dx12_probe.exe
