@@ -12,6 +12,7 @@
 - 20 Hz 固定步长自然模拟；
 - 渲染、音频和相机共同读取的状态快照；
 - 60 秒 headless 模拟工具；
+- 从统一快照生成地形、河面与天空的软件预览；
 - 世界与模拟确定性自动测试。
 
 当前不包含图形、音频播放、资源管线、DX12 与 Windows 壁纸宿主。这些属于下一个里程碑。
@@ -32,7 +33,16 @@ ctest --test-dir build --output-on-failure
 ./build/naturecore_sim --seed 139167 --seconds 60 --fps 60
 ```
 
-输出为 JSON。相同 seed、时长和固定 tick 应产生相同世界指纹与最终状态指纹。
+输出为 JSON。同一构建中的相同 seed、时长和固定 tick 应产生相同世界指纹与最终状态指纹。
+
+生成 60 秒位置的软件预览：
+
+```sh
+./build/nature_preview_cli --seed 139167 --seconds 60 \
+  --width 960 --height 540 --output build/nature-preview.ppm
+```
+
+软件预览只用于验证世界与相机数据。它不追求电影级画质，也不是最终渲染器。
 
 ## 结构
 
