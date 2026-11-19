@@ -78,6 +78,32 @@ if(WIN32)
     target_link_libraries(natureview_dx12_probe PRIVATE nature_dx12)
 endif()
 
+if(APPLE)
+    enable_language(OBJCXX)
+
+    add_executable(natureview_metal
+        src/platform/macos/metal_clear_app.mm
+        tools/macos/metal_clear_main.cpp
+    )
+
+    target_compile_features(natureview_metal PRIVATE cxx_std_20)
+    target_include_directories(natureview_metal PRIVATE src/platform/macos)
+    target_compile_options(natureview_metal PRIVATE
+        -fobjc-arc
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    if(NATUREVIEW_WARNINGS_AS_ERRORS)
+        target_compile_options(natureview_metal PRIVATE -Werror)
+    endif()
+    target_link_libraries(natureview_metal PRIVATE
+        "-framework Cocoa"
+        "-framework Metal"
+        "-framework QuartzCore"
+    )
+endif()
+
 include(CTest)
 
 if(BUILD_TESTING)
@@ -95,5 +121,13 @@ if(BUILD_TESTING)
 
     if(WIN32)
         add_test(NAME dx12_probe COMMAND natureview_dx12_probe)
+    endif()
+
+    if(APPLE)
+        add_test(
+            NAME metal_clear_smoke
+            COMMAND natureview_metal --smoke --frames 3 --width 480 --height 270
+        )
+        set_tests_properties(metal_clear_smoke PROPERTIES TIMEOUT 30)
     endif()
 endif()
