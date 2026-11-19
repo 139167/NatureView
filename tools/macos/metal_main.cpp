@@ -3,7 +3,7 @@
 #include <iostream>
 #include <string>
 
-#include "metal_clear_app.hpp"
+#include "metal_app.hpp"
 
 namespace {
 
@@ -15,7 +15,7 @@ void printUsage(std::ostream& output) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    natureview::platform::MetalClearOptions options;
+    natureview::platform::MetalAppOptions options;
 
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index];
@@ -51,5 +51,10 @@ int main(int argc, char** argv) {
         }
     }
 
-    return natureview::platform::runMetalClearApp(options);
+    try {
+        return natureview::platform::runMetalApp(options);
+    } catch (const std::exception& error) {
+        std::cerr << "Metal application failed: " << error.what() << '\n';
+        return EXIT_FAILURE;
+    }
 }

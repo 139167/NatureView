@@ -4,12 +4,12 @@
 
 namespace natureview::platform {
 
-struct MetalClearOptions {
+struct MetalAppOptions {
     std::uint32_t width = 1280;
     std::uint32_t height = 720;
     std::uint32_t frameLimit = 0;
 };
 
-int runMetalClearApp(const MetalClearOptions& options);
+int runMetalApp(const MetalAppOptions& options);
 
 }  // namespace natureview::platform

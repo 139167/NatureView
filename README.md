@@ -14,7 +14,7 @@
 - 60 秒 headless 模拟工具；
 - 从统一快照生成地形、河面与天空的软件预览；
 - 生成分块地形与连续河面网格，并筛选相机可见地形块；
-- macOS AppKit 窗口、Metal 命令队列、清屏与 Present；
+- macOS AppKit 窗口、Metal 网格上传、基础光照与实时相机；
 - 世界与模拟确定性自动测试。
 
 当前不包含地形网格 GPU 上传、着色器光照、音频播放、资源管线与桌面壁纸宿主。这些属于后续里程碑。
@@ -63,7 +63,7 @@ ctest --test-dir build -C Release --output-on-failure
 
 ### macOS Metal
 
-macOS 构建会生成 `natureview_metal`。当前版本只创建窗口并清除首帧背景色：
+macOS 构建会生成 `natureview_metal`。当前版本显示基础地形与河面：
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
@@ -71,7 +71,7 @@ cmake --build build --parallel
 ./build/natureview_metal --smoke --frames 3 --width 960 --height 540
 ```
 
-不带 `--frames` 时窗口保持运行，关闭窗口退出。`.github/workflows/macos.yml` 会执行 Metal smoke 测试。
+不带 `--frames` 时窗口持续运行，关闭窗口退出。`.github/workflows/macos.yml` 会执行 Metal smoke 测试。当前 shader 在运行时编译；正式管线后续改用预编译 metallib。
 
 ## 结构
 

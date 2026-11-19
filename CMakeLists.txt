@@ -82,8 +82,8 @@ if(APPLE)
     enable_language(OBJCXX)
 
     add_executable(natureview_metal
-        src/platform/macos/metal_clear_app.mm
-        tools/macos/metal_clear_main.cpp
+        src/platform/macos/metal_app.mm
+        tools/macos/metal_main.cpp
     )
 
     target_compile_features(natureview_metal PRIVATE cxx_std_20)
@@ -98,6 +98,7 @@ if(APPLE)
         target_compile_options(natureview_metal PRIVATE -Werror)
     endif()
     target_link_libraries(natureview_metal PRIVATE
+        nature_preview
         "-framework Cocoa"
         "-framework Metal"
         "-framework QuartzCore"
@@ -125,9 +126,9 @@ if(BUILD_TESTING)
 
     if(APPLE)
         add_test(
-            NAME metal_clear_smoke
+            NAME metal_scene_smoke
             COMMAND natureview_metal --smoke --frames 3 --width 480 --height 270
         )
-        set_tests_properties(metal_clear_smoke PROPERTIES TIMEOUT 30)
+        set_tests_properties(metal_scene_smoke PROPERTIES TIMEOUT 30)
     endif()
 endif()
