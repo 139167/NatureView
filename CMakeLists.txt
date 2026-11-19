@@ -74,6 +74,7 @@ if(WIN32)
     target_link_libraries(nature_dx12 PUBLIC d3d12 dxgi)
 
     add_executable(natureview_dx12_probe tools/windows/dx12_probe.cpp)
+    target_include_directories(natureview_dx12_probe PRIVATE src/platform/windows)
     target_link_libraries(natureview_dx12_probe PRIVATE nature_dx12)
 endif()
 
