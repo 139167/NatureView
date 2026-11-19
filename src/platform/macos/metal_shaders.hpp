@@ -21,6 +21,8 @@ struct Uniforms {
     float4 cameraUp;
     float4 cameraForward;
     float4 skySettings;
+    float4x4 lightViewProjection;
+    float4 shadowSettings;
 };
 
 struct TonemapUniforms {
@@ -41,6 +43,10 @@ struct SkyOut {
 };
 
 struct TonemapOut {
+    float4 position [[position]];
+};
+
+struct ShadowOut {
     float4 position [[position]];
 };
 
@@ -89,6 +95,15 @@ vertex VertexOut terrainVertex(
     out.worldPosition = in.position;
     out.normal = in.normal;
     out.uv = in.uv;
+    return out;
+}
+
+vertex ShadowOut shadowVertex(
+    VertexIn in [[stage_in]],
+    constant Uniforms& uniforms [[buffer(1)]])
+{
+    ShadowOut out;
+    out.position = uniforms.lightViewProjection * float4(in.position, 1.0);
     return out;
 }
 
@@ -170,7 +185,8 @@ fragment float4 tonemapFragment(
 
 fragment float4 terrainFragment(
     VertexOut in [[stage_in]],
-    constant Uniforms& uniforms [[buffer(1)]])
+    constant Uniforms& uniforms [[buffer(1)]],
+    depth2d<float> shadowMap [[texture(1)]])
 {
     float3 sunDirection = normalize(uniforms.sunDirection.xyz);
     float distanceToCamera = length(in.worldPosition - uniforms.cameraPosition.xyz);
@@ -242,7 +258,38 @@ fragment float4 terrainFragment(
 
         float diffuse = saturate(dot(normal, sunDirection));
         float skyLight = 0.18 + 0.25 * saturate(normal.y);
-        color *= skyLight + diffuse * 0.72;
+        float4 lightClip =
+            uniforms.lightViewProjection * float4(in.worldPosition, 1.0);
+        float3 lightNdc = lightClip.xyz / lightClip.w;
+        float2 shadowUv = float2(
+            lightNdc.x * 0.5 + 0.5,
+            0.5 - lightNdc.y * 0.5);
+        float shadowVisibility = 1.0;
+        if (all(shadowUv >= 0.0) && all(shadowUv <= 1.0) &&
+            lightNdc.z >= 0.0 && lightNdc.z <= 1.0) {
+            constexpr sampler shadowSampler(
+                coord::normalized,
+                address::clamp_to_edge,
+                filter::linear,
+                compare_func::less_equal);
+            float texel = uniforms.shadowSettings.x;
+            float depthBias =
+                uniforms.shadowSettings.y * (1.0 + (1.0 - normal.y) * 2.0);
+            float reference = lightNdc.z - depthBias;
+            float visibleSamples = 0.0;
+            for (int y = -1; y <= 1; ++y) {
+                for (int x = -1; x <= 1; ++x) {
+                    float2 offset = float2(x, y) * texel;
+                    visibleSamples += shadowMap.sample_compare(
+                        shadowSampler,
+                        shadowUv + offset,
+                        reference);
+                }
+            }
+            shadowVisibility = visibleSamples / 9.0;
+        }
+        float directVisibility = mix(0.16, 1.0, shadowVisibility);
+        color *= skyLight + diffuse * 0.72 * directVisibility;
         float sheen = pow(saturate(dot(normal, sunDirection)), 48.0) * rock * 0.10;
         color += float3(0.85, 0.78, 0.62) * sheen;
     }

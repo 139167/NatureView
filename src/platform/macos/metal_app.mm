@@ -38,6 +38,8 @@ struct alignas(16) FrameUniforms {
     float cameraUp[4]{};
     float cameraForward[4]{};
     float skySettings[4]{};
+    Matrix4 lightViewProjection;
+    float shadowSettings[4]{};
 };
 
 struct alignas(16) TonemapUniforms {
@@ -84,6 +86,24 @@ Matrix4 perspective(
     result.values[10] = farPlane / (nearPlane - farPlane);
     result.values[11] = -1.0F;
     result.values[14] = (nearPlane * farPlane) / (nearPlane - farPlane);
+    return result;
+}
+
+Matrix4 orthographic(
+    float left,
+    float right,
+    float bottom,
+    float top,
+    float nearPlane,
+    float farPlane) {
+    Matrix4 result;
+    result.values[0] = 2.0F / (right - left);
+    result.values[5] = 2.0F / (top - bottom);
+    result.values[10] = 1.0F / (nearPlane - farPlane);
+    result.values[12] = -(right + left) / (right - left);
+    result.values[13] = -(top + bottom) / (top - bottom);
+    result.values[14] = nearPlane / (nearPlane - farPlane);
+    result.values[15] = 1.0F;
     return result;
 }
 
@@ -166,6 +186,22 @@ FrameUniforms frameUniforms(
     uniforms.skySettings[2] = environment.cloudCover;
     uniforms.skySettings[3] =
         smoothstep(-4.0F, 18.0F, environment.sunElevationDegrees);
+
+    Vec3 lightFocus = camera.position + camera.forward * 700.0F;
+    lightFocus.y += 250.0F;
+    const Vec3 lightEye = lightFocus + sun * 3000.0F;
+    const Vec3 lightUp =
+        std::abs(dot(sun, {0.0F, 1.0F, 0.0F})) > 0.96F
+            ? Vec3{0.0F, 0.0F, 1.0F}
+            : Vec3{0.0F, 1.0F, 0.0F};
+    const Matrix4 lightView = view(lightEye, lightFocus, lightUp);
+    const Matrix4 lightProjection =
+        orthographic(-1600.0F, 1600.0F, -1600.0F, 1600.0F, 1.0F, 7000.0F);
+    uniforms.lightViewProjection = multiply(lightProjection, lightView);
+    uniforms.shadowSettings[0] = 1.0F / 2048.0F;
+    uniforms.shadowSettings[1] = 0.0015F;
+    uniforms.shadowSettings[2] = 1.0F;
+    uniforms.shadowSettings[3] = 1.0F;
     return uniforms;
 }
 
@@ -239,7 +275,10 @@ id<MTLRenderPipelineState> createPipeline(
         [[MTLRenderPipelineDescriptor alloc] init];
     descriptor.label = label;
     descriptor.vertexFunction = [library newFunctionWithName:vertexFunction];
-    descriptor.fragmentFunction = [library newFunctionWithName:fragmentFunction];
+    if (fragmentFunction != nil) {
+        descriptor.fragmentFunction =
+            [library newFunctionWithName:fragmentFunction];
+    }
     descriptor.vertexDescriptor = vertexDescriptor;
     descriptor.colorAttachments[0].pixelFormat = colorFormat;
     descriptor.depthAttachmentPixelFormat = depthFormat;
@@ -352,6 +391,18 @@ id<MTLDepthStencilState> createDepthState(id<MTLDevice> device, bool writeDepth)
     return [device newDepthStencilStateWithDescriptor:descriptor];
 }
 
+id<MTLTexture> createShadowTexture(id<MTLDevice> device) {
+    constexpr NSUInteger shadowSize = 2048;
+    MTLTextureDescriptor* descriptor = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
+                                     width:shadowSize
+                                    height:shadowSize
+                                 mipmapped:NO];
+    descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    descriptor.storageMode = MTLStorageModePrivate;
+    return [device newTextureWithDescriptor:descriptor];
+}
+
 }  // namespace
 
 int runMetalApp(const MetalAppOptions& options) {
@@ -392,6 +443,15 @@ int runMetalApp(const MetalAppOptions& options) {
             hdrFormat,
             depthFormat,
             terrainVertexDescriptor);
+        id<MTLRenderPipelineState> shadowPipeline = createPipeline(
+            device,
+            shaderLibrary,
+            @"NatureView shadow",
+            @"shadowVertex",
+            nil,
+            MTLPixelFormatInvalid,
+            depthFormat,
+            terrainVertexDescriptor);
         id<MTLRenderPipelineState> skyPipeline = createPipeline(
             device,
             shaderLibrary,
@@ -414,6 +474,11 @@ int runMetalApp(const MetalAppOptions& options) {
             createDepthState(device, false);
         id<MTLDepthStencilState> terrainDepthState =
             createDepthState(device, true);
+        id<MTLTexture> shadowTexture = createShadowTexture(device);
+        if (shadowTexture == nil) {
+            std::cerr << "Failed to create the shadow map\n";
+            return 1;
+        }
 
         NatureSimulation simulation(139167);
         constexpr double simulationFramesPerSecond = 60.0;
@@ -529,6 +594,53 @@ int runMetalApp(const MetalAppOptions& options) {
                         createHdrTexture(device, drawableWidth, drawableHeight);
                 }
 
+                const float aspectRatio =
+                    static_cast<float>(drawableWidth) / static_cast<float>(drawableHeight);
+                FrameUniforms terrainUniforms = frameUniforms(
+                    simulation,
+                    aspectRatio,
+                    0.0F,
+                    simulation.environment().fogDensityPerMeter);
+
+                id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
+                MTLRenderPassDescriptor* shadowPass =
+                    [MTLRenderPassDescriptor renderPassDescriptor];
+                shadowPass.depthAttachment.texture = shadowTexture;
+                shadowPass.depthAttachment.loadAction = MTLLoadActionClear;
+                shadowPass.depthAttachment.storeAction = MTLStoreActionStore;
+                shadowPass.depthAttachment.clearDepth = 1.0;
+
+                id<MTLRenderCommandEncoder> shadowEncoder =
+                    [commandBuffer renderCommandEncoderWithDescriptor:shadowPass];
+                const MTLViewport shadowViewport{
+                    0.0,
+                    0.0,
+                    2048.0,
+                    2048.0,
+                    0.0,
+                    1.0,
+                };
+                [shadowEncoder setViewport:shadowViewport];
+                [shadowEncoder setRenderPipelineState:shadowPipeline];
+                [shadowEncoder setDepthStencilState:terrainDepthState];
+                [shadowEncoder setCullMode:MTLCullModeNone];
+                [shadowEncoder setVertexBuffer:vertexBuffer offset:0 atIndex:0];
+                [shadowEncoder setVertexBytes:&terrainUniforms
+                                       length:sizeof(terrainUniforms)
+                                      atIndex:1];
+                for (std::size_t chunkIndex = 0;
+                     chunkIndex < mesh.terrainRanges.size();
+                     ++chunkIndex) {
+                    const DrawRange& range = mesh.terrainRanges[chunkIndex];
+                    [shadowEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                              indexCount:range.indexCount
+                                               indexType:MTLIndexTypeUInt32
+                                             indexBuffer:indexBuffer
+                                       indexBufferOffset:range.indexOffset *
+                                                         sizeof(std::uint32_t)];
+                }
+                [shadowEncoder endEncoding];
+
                 MTLRenderPassDescriptor* pass =
                     [MTLRenderPassDescriptor renderPassDescriptor];
                 MTLRenderPassColorAttachmentDescriptor* colorAttachment =
@@ -541,12 +653,8 @@ int runMetalApp(const MetalAppOptions& options) {
                 pass.depthAttachment.storeAction = MTLStoreActionDontCare;
                 pass.depthAttachment.clearDepth = 1.0;
 
-                id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
                 id<MTLRenderCommandEncoder> encoder =
                     [commandBuffer renderCommandEncoderWithDescriptor:pass];
-
-                const float aspectRatio =
-                    static_cast<float>(drawableWidth) / static_cast<float>(drawableHeight);
                 const MTLViewport viewport{
                     0.0,
                     0.0,
@@ -557,16 +665,12 @@ int runMetalApp(const MetalAppOptions& options) {
                 };
                 [encoder setViewport:viewport];
 
-                FrameUniforms terrainUniforms = frameUniforms(
-                    simulation,
-                    aspectRatio,
-                    0.0F,
-                    simulation.environment().fogDensityPerMeter);
                 [encoder setRenderPipelineState:skyPipeline];
                 [encoder setDepthStencilState:skyDepthState];
                 [encoder setFragmentBytes:&terrainUniforms
                                    length:sizeof(terrainUniforms)
                                   atIndex:1];
+                [encoder setFragmentTexture:shadowTexture atIndex:1];
                 [encoder drawPrimitives:MTLPrimitiveTypeTriangle
                             vertexStart:0
                             vertexCount:3];
