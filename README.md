@@ -63,7 +63,7 @@ ctest --test-dir build -C Release --output-on-failure
 
 ### macOS Metal
 
-macOS 构建会生成 `natureview_metal`。当前版本显示基础地形与河面：
+macOS 构建会生成 `natureview_metal`。当前版本显示带程序化地表细节的基础地形与河面：
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug

@@ -26,6 +26,42 @@ struct VertexOut {
     float2 uv;
 };
 
+float hash21(float2 position)
+{
+    float2 point = fract(position * float2(123.34, 345.45));
+    point += dot(point, point + 34.345);
+    return fract(point.x * point.y);
+}
+
+float valueNoise(float2 position)
+{
+    float2 cell = floor(position);
+    float2 local = fract(position);
+    float2 weight = local * local * (3.0 - 2.0 * local);
+    float lower = mix(hash21(cell), hash21(cell + float2(1.0, 0.0)), weight.x);
+    float upper = mix(hash21(cell + float2(0.0, 1.0)),
+                      hash21(cell + float2(1.0, 1.0)), weight.x);
+    return mix(lower, upper, weight.y);
+}
+
+float fbm(float2 position)
+{
+    float value = 0.0;
+    float amplitude = 0.5;
+    for (int octave = 0; octave < 4; ++octave) {
+        value += valueNoise(position) * amplitude;
+        position = position * 2.03 + float2(17.3, 9.1);
+        amplitude *= 0.5;
+    }
+    return value;
+}
+
+float terrainMicroHeight(float2 position)
+{
+    return fbm(position * 0.16 + float2(3.7, 11.9)) * 0.75 +
+           valueNoise(position * 0.62 + float2(5.3, 2.1)) * 0.25;
+}
+
 vertex VertexOut terrainVertex(
     VertexIn in [[stage_in]],
     constant Uniforms& uniforms [[buffer(1)]])
@@ -43,6 +79,7 @@ fragment float4 terrainFragment(
     constant Uniforms& uniforms [[buffer(1)]])
 {
     float3 sunDirection = normalize(uniforms.sunDirection.xyz);
+    float distanceToCamera = length(in.worldPosition - uniforms.cameraPosition.xyz);
     float3 color;
 
     if (uniforms.settings.x > 0.5) {
@@ -60,13 +97,49 @@ fragment float4 terrainFragment(
         color += float3(1.0, 0.82, 0.56) * glint * 0.8;
     } else {
         float3 normal = normalize(in.normal);
-        float rock = saturate(smoothstep(0.72, 0.35, normal.y) +
-                              smoothstep(520.0, 920.0, in.worldPosition.y));
-        float moisture = 0.5 + 0.5 * sin(
-            in.worldPosition.x * 0.011 + in.worldPosition.z * 0.017);
-        float3 vegetation = mix(float3(0.055, 0.11, 0.04),
-                                float3(0.11, 0.17, 0.06), moisture);
-        float3 stone = float3(0.21, 0.20, 0.175);
+        float2 ground = in.worldPosition.xz;
+        float macro = fbm(ground * 0.0045 + float2(4.2, 9.7));
+        float meso = fbm(ground * 0.026 + float2(18.1, 21.7));
+        float fine = valueNoise(ground * 0.19 + float2(5.3, 13.1));
+        float micro = valueNoise(ground * 0.73 + float2(31.2, 7.4));
+        float fineFootprint =
+            max(fwidth(ground.x * 0.19), fwidth(ground.y * 0.19));
+        float microFootprint =
+            max(fwidth(ground.x * 0.73), fwidth(ground.y * 0.73));
+        fine *= 1.0 - smoothstep(0.22, 1.10, fineFootprint);
+        micro *= 1.0 - smoothstep(0.20, 0.85, microFootprint);
+
+        const float offset = 0.28;
+        float heightLeft = terrainMicroHeight(ground - float2(offset, 0.0));
+        float heightRight = terrainMicroHeight(ground + float2(offset, 0.0));
+        float heightSouth = terrainMicroHeight(ground - float2(0.0, offset));
+        float heightNorth = terrainMicroHeight(ground + float2(0.0, offset));
+        float normalDetailFade =
+            (1.0 - smoothstep(120.0, 1100.0, distanceToCamera)) *
+            (1.0 - smoothstep(0.30, 1.10, microFootprint));
+        normal = normalize(normal + float3(
+            (heightLeft - heightRight) * 1.8 * normalDetailFade,
+            0.0,
+            (heightSouth - heightNorth) * 1.8 * normalDetailFade));
+
+        float slope = 1.0 - normal.y;
+        float rock = saturate(smoothstep(0.20, 0.58, slope) +
+                              smoothstep(520.0, 980.0, in.worldPosition.y) +
+                              smoothstep(0.56, 0.84, meso) * 0.45);
+        float3 vegetation = mix(
+            float3(0.026, 0.062, 0.018),
+            float3(0.070, 0.115, 0.031),
+            macro);
+        vegetation = mix(
+            vegetation,
+            float3(0.15, 0.125, 0.060),
+            smoothstep(0.48, 0.82, meso) * 0.36);
+        vegetation *= 0.80 + fine * 0.30 + micro * 0.06;
+
+        float3 stone = mix(
+            float3(0.090, 0.078, 0.063),
+            float3(0.29, 0.27, 0.21),
+            fine * 0.72 + micro * 0.28);
         color = mix(vegetation, stone, saturate(rock));
 
         float snow = smoothstep(1060.0, 1220.0, in.worldPosition.y) *
@@ -74,11 +147,12 @@ fragment float4 terrainFragment(
         color = mix(color, float3(0.76, 0.80, 0.82), snow);
 
         float diffuse = saturate(dot(normal, sunDirection));
-        float skyLight = 0.16 + 0.23 * saturate(normal.y);
-        color *= skyLight + diffuse * 0.95;
+        float skyLight = 0.18 + 0.25 * saturate(normal.y);
+        color *= skyLight + diffuse * 0.72;
+        float sheen = pow(saturate(dot(normal, sunDirection)), 48.0) * rock * 0.10;
+        color += float3(0.85, 0.78, 0.62) * sheen;
     }
 
-    float distanceToCamera = length(in.worldPosition - uniforms.cameraPosition.xyz);
     float fog = 1.0 - exp(-uniforms.settings.y * distanceToCamera);
     fog += smoothstep(900.0, 4800.0, distanceToCamera) * 0.30;
     color = mix(color, float3(0.55, 0.62, 0.68), saturate(fog) * 0.80);
