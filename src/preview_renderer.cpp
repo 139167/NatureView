@@ -16,10 +16,6 @@ Vec3 addScaled(const Vec3& origin, const Vec3& direction, float distance) {
     return origin + direction * distance;
 }
 
-float riverHalfWidth(float z) {
-    return 22.0F + 4.0F * std::sin(z * 0.0061F);
-}
-
 Vec3 terrainNormal(const WorldDefinition& world, const Vec3& point) {
     constexpr float sampleSpacing = 3.0F;
     const float heightLeft = world.sampleHeight(point.x - sampleSpacing, point.z);
@@ -112,7 +108,7 @@ Vec3 waterColor(
     const float sparkle =
         std::pow(std::max(0.0F, dot(reflected, sunDirection(environment))), 180.0F);
 
-    const float channelWidth = std::max(1.0F, riverHalfWidth(point.z));
+    const float channelWidth = std::max(1.0F, world.riverHalfWidthAt(point.z));
     const float edgeFoam =
         smoothstep(0.72F, 1.0F, std::abs(point.x - world.riverXAt(point.z)) / channelWidth);
     Vec3 color = mixColor(deepWater, reflection, 0.30F + fresnel * 0.62F);
@@ -193,7 +189,7 @@ PreviewImage SoftwarePreviewRenderer::render(
                 const float waterHeight = world.riverHeightAt(point.z);
                 const float distanceToRiver = std::abs(point.x - world.riverXAt(point.z));
                 const bool overRiver =
-                    distanceToRiver <= riverHalfWidth(point.z) &&
+                    distanceToRiver <= world.riverHalfWidthAt(point.z) &&
                     point.y <= waterHeight;
                 const bool belowTerrain = point.y <= terrainHeight;
 
@@ -209,7 +205,7 @@ PreviewImage SoftwarePreviewRenderer::render(
                         const float middleWater = world.riverHeightAt(middlePoint.z);
                         const bool middleOverRiver =
                             std::abs(middlePoint.x - world.riverXAt(middlePoint.z)) <=
-                                riverHalfWidth(middlePoint.z) &&
+                                world.riverHalfWidthAt(middlePoint.z) &&
                             middlePoint.y <= middleWater;
                         if (middleOverRiver || middlePoint.y <= middleTerrain) {
                             high = middle;
@@ -223,7 +219,7 @@ PreviewImage SoftwarePreviewRenderer::render(
                     const float finalWaterHeight = world.riverHeightAt(hitPoint.z);
                     const bool finalOverRiver =
                         std::abs(hitPoint.x - world.riverXAt(hitPoint.z)) <=
-                            riverHalfWidth(hitPoint.z) &&
+                            world.riverHalfWidthAt(hitPoint.z) &&
                         hitPoint.y <= finalWaterHeight + 0.08F;
                     const float finalTerrainHeight =
                         world.sampleHeight(hitPoint.x, hitPoint.z);

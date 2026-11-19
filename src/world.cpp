@@ -103,6 +103,10 @@ float WorldDefinition::riverHeightAt(float z) const {
                 position - static_cast<float>(index));
 }
 
+float WorldDefinition::riverHalfWidthAt(float z) const {
+    return 22.0F + 4.0F * std::sin(z * 0.0061F);
+}
+
 WorldDefinition generateHeroWorld(std::uint64_t seed) {
     WorldDefinition world;
     world.seed = seed;

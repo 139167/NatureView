@@ -9,6 +9,7 @@
 #include <string>
 
 #include "nature/render/preview_renderer.hpp"
+#include "nature/render/render_scene.hpp"
 
 namespace {
 
@@ -94,6 +95,20 @@ int main(int argc, char** argv) {
         simulation.advance(1.0 / simulationFramesPerSecond);
     }
 
+    const natureview::RenderScene renderScene =
+        natureview::buildRenderScene(simulation.world());
+    const std::vector<std::uint32_t> visibleChunks =
+        natureview::selectVisibleTerrainChunks(
+            renderScene,
+            simulation.camera(),
+            static_cast<float>(options.width) / static_cast<float>(options.height));
+    std::size_t terrainVertices = 0;
+    std::size_t terrainTriangles = 0;
+    for (const natureview::TerrainChunk& chunk : renderScene.terrainChunks) {
+        terrainVertices += chunk.mesh.vertices.size();
+        terrainTriangles += chunk.mesh.indices.size() / 3;
+    }
+
     const auto renderStart = std::chrono::steady_clock::now();
     natureview::SoftwarePreviewRenderer renderer;
     const natureview::PreviewImage image = renderer.render(
@@ -116,6 +131,14 @@ int main(int argc, char** argv) {
               << "simulation_seconds=" << simulation.elapsedSeconds() << '\n'
               << "image=" << image.width << 'x' << image.height << '\n'
               << "image_fingerprint=" << std::hex << image.fingerprint() << std::dec << '\n'
+              << "terrain_chunks=" << renderScene.terrainChunks.size() << '\n'
+              << "visible_terrain_chunks=" << visibleChunks.size() << '\n'
+              << "terrain_vertices=" << terrainVertices << '\n'
+              << "terrain_triangles=" << terrainTriangles << '\n'
+              << "river_vertices=" << renderScene.river.vertices.size() << '\n'
+              << "river_triangles=" << renderScene.river.indices.size() / 3 << '\n'
+              << "scene_fingerprint=" << std::hex << renderScene.fingerprint()
+              << std::dec << '\n'
               << "render_ms=" << elapsedMilliseconds << '\n';
     return EXIT_SUCCESS;
 }

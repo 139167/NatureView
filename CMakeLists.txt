@@ -34,6 +34,7 @@ endif()
 
 add_library(nature_preview
     src/preview_renderer.cpp
+    src/render_scene.cpp
 )
 
 target_compile_features(nature_preview PUBLIC cxx_std_20)
@@ -68,4 +69,8 @@ if(BUILD_TESTING)
     add_executable(preview_tests tests/preview_tests.cpp)
     target_link_libraries(preview_tests PRIVATE nature_preview)
     add_test(NAME preview_tests COMMAND preview_tests)
+
+    add_executable(render_scene_tests tests/render_scene_tests.cpp)
+    target_link_libraries(render_scene_tests PRIVATE nature_preview)
+    add_test(NAME render_scene_tests COMMAND render_scene_tests)
 endif()

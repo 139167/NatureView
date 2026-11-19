@@ -24,6 +24,7 @@ struct WorldDefinition {
     [[nodiscard]] float sampleHeight(float x, float z) const;
     [[nodiscard]] float riverXAt(float z) const;
     [[nodiscard]] float riverHeightAt(float z) const;
+    [[nodiscard]] float riverHalfWidthAt(float z) const;
 };
 
 [[nodiscard]] WorldDefinition generateHeroWorld(std::uint64_t seed);
