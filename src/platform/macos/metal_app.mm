@@ -34,6 +34,15 @@ struct alignas(16) FrameUniforms {
     float cameraPosition[4]{};
     float sunDirection[4]{};
     float settings[4]{};
+    float cameraRight[4]{};
+    float cameraUp[4]{};
+    float cameraForward[4]{};
+    float skySettings[4]{};
+};
+
+struct alignas(16) TonemapUniforms {
+    float exposure = 0.0F;
+    float padding[3]{};
 };
 
 struct DrawRange {
@@ -137,6 +146,26 @@ FrameUniforms frameUniforms(
     uniforms.settings[1] = fogDensity;
     uniforms.settings[2] = static_cast<float>(simulation.elapsedSeconds());
     uniforms.settings[3] = 0.0F;
+
+    const Vec3 worldUp = {0.0F, 1.0F, 0.0F};
+    const Vec3 right = normalize(cross(worldUp, camera.forward));
+    const Vec3 up = cross(camera.forward, right);
+    uniforms.cameraRight[0] = right.x;
+    uniforms.cameraRight[1] = right.y;
+    uniforms.cameraRight[2] = right.z;
+    uniforms.cameraUp[0] = up.x;
+    uniforms.cameraUp[1] = up.y;
+    uniforms.cameraUp[2] = up.z;
+    uniforms.cameraForward[0] = camera.forward.x;
+    uniforms.cameraForward[1] = camera.forward.y;
+    uniforms.cameraForward[2] = camera.forward.z;
+    uniforms.cameraForward[3] = 0.0F;
+    uniforms.skySettings[0] =
+        std::tan(camera.verticalFovDegrees * 0.5F * kPi / 180.0F);
+    uniforms.skySettings[1] = aspectRatio;
+    uniforms.skySettings[2] = environment.cloudCover;
+    uniforms.skySettings[3] =
+        smoothstep(-4.0F, 18.0F, environment.sunElevationDegrees);
     return uniforms;
 }
 
@@ -184,10 +213,7 @@ CombinedMesh combineMesh(const RenderScene& scene) {
     return combined;
 }
 
-id<MTLRenderPipelineState> createPipeline(
-    id<MTLDevice> device,
-    MTLPixelFormat colorFormat,
-    MTLPixelFormat depthFormat) {
+id<MTLLibrary> compileShaderLibrary(id<MTLDevice> device) {
     NSError* error = nil;
     NSString* source = [NSString stringWithUTF8String:kMetalShaderSource];
     id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
@@ -196,13 +222,39 @@ id<MTLRenderPipelineState> createPipeline(
             std::string("Metal shader compilation failed: ") +
             [[error localizedDescription] UTF8String]);
     }
+    return library;
+}
 
+id<MTLRenderPipelineState> createPipeline(
+    id<MTLDevice> device,
+    id<MTLLibrary> library,
+    NSString* label,
+    NSString* vertexFunction,
+    NSString* fragmentFunction,
+    MTLPixelFormat colorFormat,
+    MTLPixelFormat depthFormat,
+    MTLVertexDescriptor* vertexDescriptor) {
+    NSError* error = nil;
     MTLRenderPipelineDescriptor* descriptor =
         [[MTLRenderPipelineDescriptor alloc] init];
-    descriptor.label = @"NatureView terrain";
-    descriptor.vertexFunction = [library newFunctionWithName:@"terrainVertex"];
-    descriptor.fragmentFunction = [library newFunctionWithName:@"terrainFragment"];
+    descriptor.label = label;
+    descriptor.vertexFunction = [library newFunctionWithName:vertexFunction];
+    descriptor.fragmentFunction = [library newFunctionWithName:fragmentFunction];
+    descriptor.vertexDescriptor = vertexDescriptor;
+    descriptor.colorAttachments[0].pixelFormat = colorFormat;
+    descriptor.depthAttachmentPixelFormat = depthFormat;
+    id<MTLRenderPipelineState> pipeline =
+        [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
+    if (pipeline == nil) {
+        throw std::runtime_error(
+            std::string("Metal pipeline creation failed for ") +
+            [label UTF8String] + ": " +
+            [[error localizedDescription] UTF8String]);
+    }
+    return pipeline;
+}
 
+MTLVertexDescriptor* createTerrainVertexDescriptor() {
     MTLVertexDescriptor* vertexDescriptor = [[MTLVertexDescriptor alloc] init];
     vertexDescriptor.attributes[0].format = MTLVertexFormatFloat3;
     vertexDescriptor.attributes[0].offset = offsetof(RenderVertex, position);
@@ -214,18 +266,7 @@ id<MTLRenderPipelineState> createPipeline(
     vertexDescriptor.attributes[2].offset = offsetof(RenderVertex, uv);
     vertexDescriptor.attributes[2].bufferIndex = 0;
     vertexDescriptor.layouts[0].stride = sizeof(RenderVertex);
-    descriptor.vertexDescriptor = vertexDescriptor;
-
-    descriptor.colorAttachments[0].pixelFormat = colorFormat;
-    descriptor.depthAttachmentPixelFormat = depthFormat;
-    id<MTLRenderPipelineState> pipeline =
-        [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
-    if (pipeline == nil) {
-        throw std::runtime_error(
-            std::string("Metal pipeline creation failed: ") +
-            [[error localizedDescription] UTF8String]);
-    }
-    return pipeline;
+    return vertexDescriptor;
 }
 
 void drainEvents() {
@@ -289,6 +330,28 @@ id<MTLTexture> createDepthTexture(
     return [device newTextureWithDescriptor:descriptor];
 }
 
+id<MTLTexture> createHdrTexture(
+    id<MTLDevice> device,
+    NSUInteger width,
+    NSUInteger height) {
+    MTLTextureDescriptor* descriptor = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                     width:width
+                                    height:height
+                                 mipmapped:NO];
+    descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    descriptor.storageMode = MTLStorageModePrivate;
+    return [device newTextureWithDescriptor:descriptor];
+}
+
+id<MTLDepthStencilState> createDepthState(id<MTLDevice> device, bool writeDepth) {
+    MTLDepthStencilDescriptor* descriptor = [[MTLDepthStencilDescriptor alloc] init];
+    descriptor.depthCompareFunction = writeDepth ? MTLCompareFunctionLess
+                                                 : MTLCompareFunctionAlways;
+    descriptor.depthWriteEnabled = writeDepth;
+    return [device newDepthStencilStateWithDescriptor:descriptor];
+}
+
 }  // namespace
 
 int runMetalApp(const MetalAppOptions& options) {
@@ -315,9 +378,42 @@ int runMetalApp(const MetalAppOptions& options) {
         }
 
         const MTLPixelFormat colorFormat = MTLPixelFormatBGRA8Unorm_sRGB;
+        const MTLPixelFormat hdrFormat = MTLPixelFormatRGBA16Float;
         const MTLPixelFormat depthFormat = MTLPixelFormatDepth32Float;
-        id<MTLRenderPipelineState> pipeline =
-            createPipeline(device, colorFormat, depthFormat);
+        id<MTLLibrary> shaderLibrary = compileShaderLibrary(device);
+        MTLVertexDescriptor* terrainVertexDescriptor =
+            createTerrainVertexDescriptor();
+        id<MTLRenderPipelineState> terrainPipeline = createPipeline(
+            device,
+            shaderLibrary,
+            @"NatureView terrain",
+            @"terrainVertex",
+            @"terrainFragment",
+            hdrFormat,
+            depthFormat,
+            terrainVertexDescriptor);
+        id<MTLRenderPipelineState> skyPipeline = createPipeline(
+            device,
+            shaderLibrary,
+            @"NatureView sky",
+            @"skyVertex",
+            @"skyFragment",
+            hdrFormat,
+            depthFormat,
+            nil);
+        id<MTLRenderPipelineState> tonemapPipeline = createPipeline(
+            device,
+            shaderLibrary,
+            @"NatureView tonemap",
+            @"tonemapVertex",
+            @"tonemapFragment",
+            colorFormat,
+            MTLPixelFormatInvalid,
+            nil);
+        id<MTLDepthStencilState> skyDepthState =
+            createDepthState(device, false);
+        id<MTLDepthStencilState> terrainDepthState =
+            createDepthState(device, true);
 
         NatureSimulation simulation(139167);
         constexpr double simulationFramesPerSecond = 60.0;
@@ -373,6 +469,7 @@ int runMetalApp(const MetalAppOptions& options) {
 
         dispatch_semaphore_t inFlight = dispatch_semaphore_create(2);
         id<MTLTexture> depthTexture = nil;
+        id<MTLTexture> hdrTexture = nil;
         id<MTLCommandBuffer> lastCommandBuffer = nil;
         id<MTLBuffer> captureBuffer = nil;
         NSUInteger capturedBytesPerRow = 0;
@@ -425,16 +522,20 @@ int runMetalApp(const MetalAppOptions& options) {
                     depthTexture =
                         createDepthTexture(device, drawableWidth, drawableHeight);
                 }
+                if (hdrTexture == nil ||
+                    hdrTexture.width != drawableWidth ||
+                    hdrTexture.height != drawableHeight) {
+                    hdrTexture =
+                        createHdrTexture(device, drawableWidth, drawableHeight);
+                }
 
                 MTLRenderPassDescriptor* pass =
                     [MTLRenderPassDescriptor renderPassDescriptor];
                 MTLRenderPassColorAttachmentDescriptor* colorAttachment =
                     pass.colorAttachments[0];
-                colorAttachment.texture = drawable.texture;
-                colorAttachment.loadAction = MTLLoadActionClear;
+                colorAttachment.texture = hdrTexture;
+                colorAttachment.loadAction = MTLLoadActionDontCare;
                 colorAttachment.storeAction = MTLStoreActionStore;
-                colorAttachment.clearColor =
-                    MTLClearColorMake(0.34, 0.47, 0.62, 1.0);
                 pass.depthAttachment.texture = depthTexture;
                 pass.depthAttachment.loadAction = MTLLoadActionClear;
                 pass.depthAttachment.storeAction = MTLStoreActionDontCare;
@@ -443,9 +544,6 @@ int runMetalApp(const MetalAppOptions& options) {
                 id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
                 id<MTLRenderCommandEncoder> encoder =
                     [commandBuffer renderCommandEncoderWithDescriptor:pass];
-                [encoder setRenderPipelineState:pipeline];
-                [encoder setCullMode:MTLCullModeNone];
-                [encoder setVertexBuffer:vertexBuffer offset:0 atIndex:0];
 
                 const float aspectRatio =
                     static_cast<float>(drawableWidth) / static_cast<float>(drawableHeight);
@@ -464,6 +562,19 @@ int runMetalApp(const MetalAppOptions& options) {
                     aspectRatio,
                     0.0F,
                     simulation.environment().fogDensityPerMeter);
+                [encoder setRenderPipelineState:skyPipeline];
+                [encoder setDepthStencilState:skyDepthState];
+                [encoder setFragmentBytes:&terrainUniforms
+                                   length:sizeof(terrainUniforms)
+                                  atIndex:1];
+                [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                            vertexStart:0
+                            vertexCount:3];
+
+                [encoder setRenderPipelineState:terrainPipeline];
+                [encoder setDepthStencilState:terrainDepthState];
+                [encoder setCullMode:MTLCullModeNone];
+                [encoder setVertexBuffer:vertexBuffer offset:0 atIndex:0];
                 [encoder setVertexBytes:&terrainUniforms
                                  length:sizeof(terrainUniforms)
                                 atIndex:1];
@@ -503,6 +614,35 @@ int runMetalApp(const MetalAppOptions& options) {
                              indexBufferOffset:mesh.riverRange.indexOffset *
                                                sizeof(std::uint32_t)];
                 [encoder endEncoding];
+
+                MTLRenderPassDescriptor* compositePass =
+                    [MTLRenderPassDescriptor renderPassDescriptor];
+                compositePass.colorAttachments[0].texture = drawable.texture;
+                compositePass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+                compositePass.colorAttachments[0].storeAction = MTLStoreActionStore;
+
+                id<MTLRenderCommandEncoder> compositeEncoder =
+                    [commandBuffer renderCommandEncoderWithDescriptor:compositePass];
+                [compositeEncoder setViewport:viewport];
+                [compositeEncoder setRenderPipelineState:tonemapPipeline];
+                [compositeEncoder setFragmentTexture:hdrTexture atIndex:0];
+                const float exposure =
+                    -0.15F +
+                    (1.0F - simulation.environment().cloudCover) * 0.08F +
+                    simulation.environment().rainIntensity * 0.05F +
+                    clamp(
+                        (12.0F - simulation.environment().sunElevationDegrees) / 80.0F,
+                        0.0F,
+                        0.12F);
+                TonemapUniforms tonemapUniforms;
+                tonemapUniforms.exposure = exposure;
+                [compositeEncoder setFragmentBytes:&tonemapUniforms
+                                            length:sizeof(tonemapUniforms)
+                                           atIndex:0];
+                [compositeEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                     vertexStart:0
+                                     vertexCount:3];
+                [compositeEncoder endEncoding];
 
                 if (!options.capturePath.empty() &&
                     renderedFrames + 1 == options.frameLimit) {

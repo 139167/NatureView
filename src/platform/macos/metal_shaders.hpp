@@ -17,6 +17,15 @@ struct Uniforms {
     float4 cameraPosition;
     float4 sunDirection;
     float4 settings;
+    float4 cameraRight;
+    float4 cameraUp;
+    float4 cameraForward;
+    float4 skySettings;
+};
+
+struct TonemapUniforms {
+    float exposure;
+    float padding[3];
 };
 
 struct VertexOut {
@@ -24,6 +33,15 @@ struct VertexOut {
     float3 worldPosition;
     float3 normal;
     float2 uv;
+};
+
+struct SkyOut {
+    float4 position [[position]];
+    float2 ndc;
+};
+
+struct TonemapOut {
+    float4 position [[position]];
 };
 
 float hash21(float2 position)
@@ -72,6 +90,82 @@ vertex VertexOut terrainVertex(
     out.normal = in.normal;
     out.uv = in.uv;
     return out;
+}
+
+vertex SkyOut skyVertex(uint vertexID [[vertex_id]])
+{
+    float2 positions[3] = {
+        float2(-1.0, -1.0),
+        float2(3.0, -1.0),
+        float2(-1.0, 3.0),
+    };
+    SkyOut out;
+    out.position = float4(positions[vertexID], 1.0, 1.0);
+    out.ndc = positions[vertexID];
+    return out;
+}
+
+fragment float4 skyFragment(
+    SkyOut in [[stage_in]],
+    constant Uniforms& uniforms [[buffer(1)]])
+{
+    float3 forward = normalize(uniforms.cameraForward.xyz);
+    float3 right = normalize(uniforms.cameraRight.xyz);
+    float3 up = normalize(uniforms.cameraUp.xyz);
+    float tangent = uniforms.skySettings.x;
+    float aspect = uniforms.skySettings.y;
+    float cloud = uniforms.skySettings.z;
+    float daylight = uniforms.skySettings.w;
+    float3 ray = normalize(
+        forward + right * (in.ndc.x * tangent * aspect) + up * (in.ndc.y * tangent));
+
+    float elevation = saturate(ray.y);
+    float3 horizon = float3(0.16, 0.23, 0.32);
+    float3 zenith = float3(0.018, 0.065, 0.18);
+    float3 color = mix(horizon, zenith, pow(elevation, 0.62));
+    color *= mix(float3(0.010, 0.018, 0.035), float3(1.0), daylight);
+
+    float3 sunDirection = normalize(uniforms.sunDirection.xyz);
+    float solar = saturate(dot(ray, sunDirection));
+    float halo = pow(solar, 32.0) * 0.35;
+    float disk = smoothstep(0.9992, 0.99975, solar) * 8.0;
+    color += float3(1.0, 0.67, 0.34) * (halo + disk) * daylight;
+    color *= 1.0 - cloud * 0.28;
+
+    return float4(color, 1.0);
+}
+
+vertex TonemapOut tonemapVertex(uint vertexID [[vertex_id]])
+{
+    float2 positions[3] = {
+        float2(-1.0, -1.0),
+        float2(3.0, -1.0),
+        float2(-1.0, 3.0),
+    };
+    TonemapOut out;
+    out.position = float4(positions[vertexID], 1.0, 1.0);
+    return out;
+}
+
+float3 acesToneMap(float3 color)
+{
+    return saturate((color * (2.51 * color + 0.03)) /
+                    (color * (2.43 * color + 0.59) + 0.14));
+}
+
+fragment float4 tonemapFragment(
+    TonemapOut in [[stage_in]],
+    texture2d<float> hdrColor [[texture(0)]],
+    constant TonemapUniforms& uniforms [[buffer(0)]])
+{
+    constexpr sampler colorSampler(
+        coord::normalized,
+        address::clamp_to_edge,
+        filter::nearest);
+    float2 uv = in.position.xy / float2(hdrColor.get_width(), hdrColor.get_height());
+    float3 color = hdrColor.sample(colorSampler, uv).rgb;
+    color *= exp2(uniforms.exposure);
+    return float4(acesToneMap(color), 1.0);
 }
 
 fragment float4 terrainFragment(
@@ -155,8 +249,8 @@ fragment float4 terrainFragment(
 
     float fog = 1.0 - exp(-uniforms.settings.y * distanceToCamera);
     fog += smoothstep(900.0, 4800.0, distanceToCamera) * 0.30;
-    color = mix(color, float3(0.55, 0.62, 0.68), saturate(fog) * 0.80);
-    return float4(saturate(color), 1.0);
+    color = mix(color, float3(0.28, 0.35, 0.43), saturate(fog) * 0.80);
+    return float4(max(color, 0.0), 1.0);
 }
 )METAL";
 
