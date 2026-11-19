@@ -16,7 +16,7 @@
 - 生成分块地形与连续河面网格，并筛选相机可见地形块；
 - 世界与模拟确定性自动测试。
 
-当前不包含图形、音频播放、资源管线、DX12 与 Windows 壁纸宿主。这些属于下一个里程碑。
+当前不包含交换链、窗口绘制、音频播放、资源管线与 Windows 壁纸宿主。这些属于后续里程碑。
 
 ## 构建
 
@@ -46,6 +46,19 @@ ctest --test-dir build --output-on-failure
 软件预览只用于验证世界与相机数据。它不追求电影级画质，也不是最终渲染器。
 
 预览 CLI 同时输出渲染场景统计，包括地形块、可见块、顶点、三角形和场景指纹。
+
+### Windows D3D12
+
+Windows 构建会额外生成 `natureview_dx12_probe`。该探针只验证 DXGI 与 D3D12 设备初始化，优先选择硬件适配器，失败时回退 WARP。
+
+```powershell
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release --parallel
+ctest --test-dir build -C Release --output-on-failure
+.\build\Release\natureview_dx12_probe.exe
+```
+
+`.github/workflows/windows.yml` 会在 GitHub Windows runner 上编译并执行全部测试。
 
 ## 结构
 

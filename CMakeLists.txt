@@ -59,6 +59,24 @@ target_link_libraries(naturecore_sim PRIVATE nature_core)
 add_executable(nature_preview_cli tools/nature_preview.cpp)
 target_link_libraries(nature_preview_cli PRIVATE nature_preview)
 
+if(WIN32)
+    add_library(nature_dx12
+        src/platform/windows/dx12_device.cpp
+    )
+
+    target_compile_features(nature_dx12 PUBLIC cxx_std_20)
+    target_include_directories(nature_dx12 PRIVATE src/platform/windows)
+    target_compile_definitions(nature_dx12 PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(nature_dx12 PRIVATE /W4 /fp:strict)
+    if(NATUREVIEW_WARNINGS_AS_ERRORS)
+        target_compile_options(nature_dx12 PRIVATE /WX)
+    endif()
+    target_link_libraries(nature_dx12 PUBLIC d3d12 dxgi)
+
+    add_executable(natureview_dx12_probe tools/windows/dx12_probe.cpp)
+    target_link_libraries(natureview_dx12_probe PRIVATE nature_dx12)
+endif()
+
 include(CTest)
 
 if(BUILD_TESTING)
@@ -73,4 +91,8 @@ if(BUILD_TESTING)
     add_executable(render_scene_tests tests/render_scene_tests.cpp)
     target_link_libraries(render_scene_tests PRIVATE nature_preview)
     add_test(NAME render_scene_tests COMMAND render_scene_tests)
+
+    if(WIN32)
+        add_test(NAME dx12_probe COMMAND natureview_dx12_probe)
+    endif()
 endif()
