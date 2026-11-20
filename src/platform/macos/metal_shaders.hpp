@@ -123,6 +123,33 @@ float terrainMicroHeight(float2 position)
            valueNoise(position * 0.62 + float2(5.3, 2.1)) * 0.25;
 }
 
+float cloudField(float2 position, float time)
+{
+    float2 motion = float2(time * 0.0014, time * 0.0006);
+    float broad = fbm(position * 0.55 + motion);
+    float detail = fbm(position * 1.75 - motion * 1.4 + float2(7.7, 3.1));
+    return broad * 0.78 + detail * 0.32;
+}
+
+float cloudDensity(
+    float2 position,
+    float time,
+    float coverage)
+{
+    float field = cloudField(position, time);
+    float threshold = mix(0.58, 0.34, saturate(coverage));
+    return smoothstep(threshold - 0.02, threshold + 0.15, field);
+}
+
+float cloudShadowVisibility(
+    float2 worldPosition,
+    float time,
+    float coverage)
+{
+    float density = cloudDensity(worldPosition * 0.0014, time, coverage);
+    return 1.0 - density * 0.34;
+}
+
 vertex VertexOut terrainVertex(
     VertexIn in [[stage_in]],
     constant Uniforms& uniforms [[buffer(1)]])
@@ -327,6 +354,25 @@ float3 skyRadiance(
     }
     color += auroraEmission * vertical * northMask * night * clear *
              auroraActivity * 0.78;
+
+    float cloudPlaneScale = min(1.10 / max(ray.y, 0.05), 22.0);
+    float2 cloudPlane = ray.xz * cloudPlaneScale;
+    float cloudLayer = cloudDensity(cloudPlane * 0.32, time, cloud);
+    float cloudLayerFade =
+        smoothstep(0.012, 0.075, ray.y) *
+        (1.0 - smoothstep(0.68, 0.94, ray.y));
+    cloudLayer *= cloudLayerFade;
+    float cloudLighting =
+        daylight * (0.55 + 0.45 * saturate(sunDirection.y + 0.20));
+    float3 cloudColor = mix(
+        float3(0.012, 0.017, 0.026),
+        float3(0.62, 0.68, 0.72),
+        cloudLighting);
+    float cloudSunScatter =
+        pow(saturate(dot(ray, sunDirection)), 7.0) * daylight;
+    cloudColor += float3(1.0, 0.70, 0.42) * cloudSunScatter * 0.48;
+    cloudColor *= 0.68 + cloudLayer * 0.32;
+    color = mix(color, cloudColor, cloudLayer * 0.80);
     return color;
 }
 
@@ -709,6 +755,10 @@ fragment float4 terrainFragment(
             shadowVisibility = visibleSamples / 25.0;
         }
         float diffuse = saturate(dot(normal, sunDirection));
+        diffuse *= cloudShadowVisibility(
+            in.worldPosition.xz,
+            uniforms.settings.z,
+            uniforms.skySettings.z);
         float ambient = 0.20 + 0.18 * saturate(normal.y);
         color = surface *
             (ambient + diffuse * mix(0.12, 0.78, shadowVisibility));
@@ -820,6 +870,10 @@ fragment float4 terrainFragment(
         color = mix(color, float3(0.76, 0.80, 0.82), snow);
 
         float diffuse = saturate(dot(normal, sunDirection));
+        diffuse *= cloudShadowVisibility(
+            in.worldPosition.xz,
+            uniforms.settings.z,
+            uniforms.skySettings.z);
         float skyLight = 0.18 + 0.25 * saturate(normal.y);
         float4 lightClip =
             uniforms.lightViewProjection * float4(in.worldPosition, 1.0);
