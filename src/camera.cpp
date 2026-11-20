@@ -15,8 +15,8 @@ HeroCameraPath::HeroCameraPath(const WorldDefinition& world) {
 
     for (int index = 0; index < pointCount; ++index) {
         const float z = firstZ + static_cast<float>(index) * spacing;
-        const float x = world.riverXAt(z) + 52.0F + 4.0F * std::sin(z * 0.0041F);
-        const float y = world.sampleHeight(x, z) + 2.4F;
+        const float x = world.riverXAt(z) + 34.0F + 3.0F * std::sin(z * 0.0041F);
+        const float y = world.sampleHeight(x, z) + 2.7F;
         points_.push_back({x, y, z});
     }
 
@@ -73,8 +73,8 @@ CameraState HeroCameraPath::sample(float viewDistanceMeters) const {
 
     const std::size_t lookAheadIndex = std::min(beginIndex + 2, points_.size() - 1);
     Vec3 lookDirection = points_[lookAheadIndex] - state.position;
-    lookDirection.x -= 18.0F;
-    lookDirection.y += 2.5F;
+    lookDirection.x -= 30.0F;
+    lookDirection.y -= 1.0F;
     state.forward = normalize(lookDirection);
     return state;
 }
