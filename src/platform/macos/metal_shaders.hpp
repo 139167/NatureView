@@ -797,17 +797,58 @@ fragment float4 terrainFragment(
             reflectionColor,
             reflectionDepth);
 
+        constexpr sampler refractionColorSampler(
+            coord::normalized,
+            address::clamp_to_edge,
+            filter::linear);
+        constexpr sampler refractionDepthSampler(
+            coord::normalized,
+            address::clamp_to_edge,
+            filter::nearest);
+        float4 waterClip =
+            uniforms.viewProjection * float4(in.worldPosition, 1.0);
+        float2 screenUv = float2(
+            waterClip.x / waterClip.w * 0.5 + 0.5,
+            0.5 - waterClip.y / waterClip.w * 0.5);
+        float2 distortion =
+            float2(slopeX, slopeZ) * (0.010 + slopeX * 0.020);
+        float2 refractedUv = clamp(
+            screenUv + distortion,
+            float2(0.001),
+            float2(0.999));
+        float bedDepth = reflectionDepth.sample(
+            refractionDepthSampler,
+            screenUv);
+        float opticalDepth = 6.0;
+        if (bedDepth < 0.9999) {
+            float3 bedPosition =
+                reconstructWaterDepth(screenUv, bedDepth, uniforms);
+            opticalDepth = max(length(bedPosition - in.worldPosition), 0.05);
+        }
+        float absorption = 1.0 - exp(-opticalDepth * 0.26);
+        float3 bedColor = reflectionColor.sample(
+            refractionColorSampler,
+            refractedUv).rgb;
+        float3 opticalTint = float3(0.010, 0.052, 0.060);
+
         float edge = abs(in.uv.x * 2.0 - 1.0);
         float depthVariation = fbm(float2(
             in.uv.y * 70.0 - time * 0.25,
             edge * 4.0));
         float3 deepWater = float3(0.004, 0.018, 0.028);
         float3 shallowWater = float3(0.018, 0.085, 0.095);
+        float3 transmitted = mix(
+            bedColor,
+            opticalTint,
+            absorption * 0.76);
         float3 water = mix(
-            deepWater,
-            shallowWater,
-            0.26 + depthVariation * 0.52);
-        color = mix(water, reflection, 0.16 + fresnel * 0.78);
+            mix(shallowWater, deepWater, absorption),
+            transmitted,
+            0.24 + depthVariation * 0.36);
+        float reflectionAmount =
+            (0.10 + fresnel * 0.82) *
+            (0.70 + absorption * 0.30);
+        color = mix(water, reflection, saturate(reflectionAmount));
 
         float glint = pow(saturate(dot(reflected, sunDirection)), 260.0);
         color += float3(1.0, 0.78, 0.46) * glint * 2.2;

@@ -740,7 +740,6 @@ int runMetalApp(const MetalAppOptions& options) {
         NSUInteger capturedBytesPerRow = 0;
         NSUInteger capturedWidth = 0;
         NSUInteger capturedHeight = 0;
-        bool reflectionHistoryValid = false;
         std::uint32_t renderedFrames = 0;
         bool failed = false;
         auto previousFrameTime = std::chrono::steady_clock::now();
@@ -804,7 +803,6 @@ int runMetalApp(const MetalAppOptions& options) {
                         createHdrTexture(device, drawableWidth, drawableHeight);
                     reflectionDepthHistory =
                         createDepthTexture(device, drawableWidth, drawableHeight);
-                    reflectionHistoryValid = false;
                     const NSUInteger bloomWidth =
                         std::max<NSUInteger>(1, drawableWidth / 2);
                     const NSUInteger bloomHeight =
@@ -968,28 +966,6 @@ int runMetalApp(const MetalAppOptions& options) {
                              indexBufferOffset:0
                                  instanceCount:gpuTrees.size()];
 
-                FrameUniforms riverUniforms = frameUniforms(
-                    simulation,
-                    aspectRatio,
-                    1.0F,
-                    simulation.environment().fogDensityPerMeter);
-                riverUniforms.waterSettings[0] =
-                    reflectionHistoryValid ? 1.0F : 0.0F;
-                [encoder setRenderPipelineState:terrainPipeline];
-                [encoder setCullMode:MTLCullModeNone];
-                [encoder setVertexBuffer:vertexBuffer offset:0 atIndex:0];
-                [encoder setVertexBytes:&riverUniforms
-                                 length:sizeof(riverUniforms)
-                                atIndex:1];
-                [encoder setFragmentBytes:&riverUniforms
-                                   length:sizeof(riverUniforms)
-                                  atIndex:1];
-                [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                                    indexCount:mesh.riverRange.indexCount
-                                     indexType:MTLIndexTypeUInt32
-                                   indexBuffer:indexBuffer
-                             indexBufferOffset:mesh.riverRange.indexOffset *
-                                               sizeof(std::uint32_t)];
                 [encoder endEncoding];
 
                 id<MTLBlitCommandEncoder> historyEncoder =
@@ -999,7 +975,44 @@ int runMetalApp(const MetalAppOptions& options) {
                 [historyEncoder copyFromTexture:depthTexture
                                      toTexture:reflectionDepthHistory];
                 [historyEncoder endEncoding];
-                reflectionHistoryValid = true;
+                MTLRenderPassDescriptor* waterPass =
+                    [MTLRenderPassDescriptor renderPassDescriptor];
+                waterPass.colorAttachments[0].texture = hdrTexture;
+                waterPass.colorAttachments[0].loadAction = MTLLoadActionLoad;
+                waterPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+                waterPass.depthAttachment.texture = depthTexture;
+                waterPass.depthAttachment.loadAction = MTLLoadActionLoad;
+                waterPass.depthAttachment.storeAction = MTLStoreActionDontCare;
+
+                id<MTLRenderCommandEncoder> waterEncoder =
+                    [commandBuffer renderCommandEncoderWithDescriptor:waterPass];
+                [waterEncoder setViewport:viewport];
+                [waterEncoder setRenderPipelineState:terrainPipeline];
+                [waterEncoder setDepthStencilState:terrainDepthState];
+                [waterEncoder setCullMode:MTLCullModeNone];
+                [waterEncoder setVertexBuffer:vertexBuffer offset:0 atIndex:0];
+                [waterEncoder setFragmentTexture:shadowTexture atIndex:1];
+                [waterEncoder setFragmentTexture:reflectionColorHistory atIndex:2];
+                [waterEncoder setFragmentTexture:reflectionDepthHistory atIndex:3];
+                FrameUniforms riverUniforms = frameUniforms(
+                    simulation,
+                    aspectRatio,
+                    1.0F,
+                    simulation.environment().fogDensityPerMeter);
+                riverUniforms.waterSettings[0] = 1.0F;
+                [waterEncoder setVertexBytes:&riverUniforms
+                                      length:sizeof(riverUniforms)
+                                     atIndex:1];
+                [waterEncoder setFragmentBytes:&riverUniforms
+                                        length:sizeof(riverUniforms)
+                                       atIndex:1];
+                [waterEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                         indexCount:mesh.riverRange.indexCount
+                                          indexType:MTLIndexTypeUInt32
+                                        indexBuffer:indexBuffer
+                                  indexBufferOffset:mesh.riverRange.indexOffset *
+                                                    sizeof(std::uint32_t)];
+                [waterEncoder endEncoding];
 
                 const MTLViewport bloomViewport{
                     0.0,
@@ -1019,7 +1032,7 @@ int runMetalApp(const MetalAppOptions& options) {
                     [commandBuffer renderCommandEncoderWithDescriptor:ssaoPass];
                 [ssaoEncoder setViewport:bloomViewport];
                 [ssaoEncoder setRenderPipelineState:ssaoPipeline];
-                [ssaoEncoder setFragmentTexture:depthTexture atIndex:0];
+                [ssaoEncoder setFragmentTexture:reflectionDepthHistory atIndex:0];
                 SsaoUniforms aoUniforms =
                     ssaoUniforms(simulation, aspectRatio);
                 [ssaoEncoder setFragmentBytes:&aoUniforms
