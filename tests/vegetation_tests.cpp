@@ -34,14 +34,17 @@ int main() {
            "different seed must change vegetation");
     expect(first.instances.size() > 2000U,
            "hero valley must contain a forest population");
-    expect(first.prototype.indices.size() % 3U == 0U,
-           "tree prototype must be triangulated");
-
-    for (const std::uint32_t index : first.prototype.indices) {
-        expect(index < first.prototype.vertices.size(),
-               "tree prototype indices must stay in bounds");
+    for (const natureview::RenderMesh& prototype : first.prototypes) {
+        expect(prototype.indices.size() % 3U == 0U,
+               "tree prototypes must be triangulated");
+        for (const std::uint32_t index : prototype.indices) {
+            expect(index < prototype.vertices.size(),
+                   "tree prototype indices must stay in bounds");
+        }
     }
 
+    std::size_t conifers = 0;
+    std::size_t broadleaf = 0;
     for (const natureview::TreeInstance& tree : first.instances) {
         const float riverClearance =
             std::abs(tree.position.x - world.riverXAt(tree.position.z));
@@ -53,7 +56,16 @@ int main() {
                "tree height must stay in range");
         expect(tree.canopyRadiusMeters > 1.0F && tree.canopyRadiusMeters < 3.0F,
                "tree canopy radius must stay in range");
+        expect(tree.prototypeIndex < first.prototypes.size(),
+               "tree prototype index must stay in bounds");
+        if (tree.prototypeIndex == 1) {
+            ++broadleaf;
+        } else {
+            ++conifers;
+        }
     }
+    expect(conifers > 500U, "forest must contain conifers");
+    expect(broadleaf > 100U, "low forest must contain broadleaf trees");
 
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";

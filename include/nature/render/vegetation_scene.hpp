@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -15,6 +16,7 @@ struct TreeInstance {
     float yawRadians = 0.0F;
     float windPhase = 0.0F;
     float colorVariant = 0.0F;
+    std::uint32_t prototypeIndex = 0;
 };
 
 struct VegetationSettings {
@@ -24,7 +26,7 @@ struct VegetationSettings {
 };
 
 struct VegetationScene {
-    RenderMesh prototype;
+    std::array<RenderMesh, 2> prototypes;
     std::vector<TreeInstance> instances;
     std::uint64_t fingerprint = 0;
 };

@@ -787,6 +787,14 @@ fragment float4 terrainFragment(
             saturate(dot(normal, halfDirection)),
             in.uv.x < 0.5 ? 24.0 : 8.0) * 0.08;
         surface += float3(0.55, 0.60, 0.48) * roughnessHighlight;
+        float canopyMask = smoothstep(0.5, 0.75, in.uv.x);
+        float backlight = pow(
+            saturate(dot(
+                normalize(in.worldPosition - uniforms.cameraPosition.xyz),
+                sunDirection)),
+            4.0);
+        surface += float3(0.10, 0.24, 0.055) *
+                   backlight * canopyMask * 0.65;
         color = surface *
             (ambient + diffuse * mix(0.12, 0.78, shadowVisibility));
     } else if (uniforms.settings.x > 0.5) {

@@ -37,7 +37,7 @@ void appendTriangle(
 
 RenderMesh createConiferPrototype() {
     RenderMesh mesh;
-    constexpr int sides = 7;
+    constexpr int sides = 9;
     constexpr float trunkRadius = 0.075F;
     constexpr float trunkTop = 0.48F;
 
@@ -70,9 +70,11 @@ RenderMesh createConiferPrototype() {
         float radius;
     };
     constexpr CanopyTier tiers[] = {
-        {0.26F, 0.58F, 1.00F},
-        {0.42F, 0.76F, 0.72F},
-        {0.58F, 1.00F, 0.45F},
+        {0.22F, 0.43F, 1.00F},
+        {0.34F, 0.55F, 0.84F},
+        {0.46F, 0.68F, 0.68F},
+        {0.58F, 0.82F, 0.50F},
+        {0.70F, 1.00F, 0.30F},
     };
     for (const CanopyTier& tier : tiers) {
         for (int side = 0; side < sides; ++side) {
@@ -104,6 +106,73 @@ RenderMesh createConiferPrototype() {
     return mesh;
 }
 
+void appendCanopyCluster(
+    RenderMesh& mesh,
+    const Vec3& center,
+    const Vec3& radius) {
+    const Vec3 x = {radius.x, 0.0F, 0.0F};
+    const Vec3 y = {0.0F, radius.y, 0.0F};
+    const Vec3 z = {0.0F, 0.0F, radius.z};
+    const Vec3 positions[6] = {
+        center + x,
+        center - x,
+        center + y,
+        center - y,
+        center + z,
+        center - z,
+    };
+    const std::uint32_t faces[8][3] = {
+        {0, 2, 4}, {4, 2, 1}, {1, 2, 5}, {5, 2, 0},
+        {4, 3, 0}, {1, 3, 4}, {5, 3, 1}, {0, 3, 5},
+    };
+    for (const auto& face : faces) {
+        appendTriangle(
+            mesh,
+            positions[face[0]],
+            positions[face[1]],
+            positions[face[2]],
+            1.0F);
+    }
+}
+
+RenderMesh createBroadleafPrototype() {
+    RenderMesh mesh;
+    constexpr int sides = 7;
+    constexpr float trunkRadius = 0.085F;
+    constexpr float trunkTop = 0.62F;
+    for (int side = 0; side < sides; ++side) {
+        const float angle0 =
+            static_cast<float>(side) * 2.0F * std::numbers::pi_v<float> /
+            static_cast<float>(sides);
+        const float angle1 =
+            static_cast<float>(side + 1) * 2.0F * std::numbers::pi_v<float> /
+            static_cast<float>(sides);
+        const Vec3 bottom0 = {
+            std::cos(angle0) * trunkRadius,
+            0.0F,
+            std::sin(angle0) * trunkRadius,
+        };
+        const Vec3 bottom1 = {
+            std::cos(angle1) * trunkRadius,
+            0.0F,
+            std::sin(angle1) * trunkRadius,
+        };
+        const Vec3 top0 = {bottom0.x, trunkTop, bottom0.z};
+        const Vec3 top1 = {bottom1.x, trunkTop, bottom1.z};
+        appendTriangle(mesh, bottom0, top1, bottom1, 0.0F);
+        appendTriangle(mesh, bottom0, top0, top1, 0.0F);
+    }
+
+    appendCanopyCluster(mesh, {0.0F, 0.72F, 0.0F}, {0.72F, 0.30F, 0.72F});
+    appendCanopyCluster(mesh, {0.34F, 0.58F, 0.06F}, {0.48F, 0.25F, 0.48F});
+    appendCanopyCluster(mesh, {-0.30F, 0.61F, -0.14F}, {0.45F, 0.24F, 0.45F});
+    mesh.bounds = {
+        {-1.0F, 0.0F, -1.0F},
+        {1.0F, 1.0F, 1.0F},
+    };
+    return mesh;
+}
+
 float slopeNormalY(const WorldDefinition& world, float x, float z) {
     constexpr float offset = 12.0F;
     const float dx =
@@ -121,7 +190,8 @@ VegetationScene buildVegetationScene(
     const WorldDefinition& world,
     VegetationSettings settings) {
     VegetationScene scene;
-    scene.prototype = createConiferPrototype();
+    scene.prototypes[0] = createConiferPrototype();
+    scene.prototypes[1] = createBroadleafPrototype();
     if (world.heights.empty() || world.sizeMeters <= 0.0F ||
         settings.spacingMeters < 10.0F) {
         return scene;
@@ -177,6 +247,9 @@ VegetationScene buildVegetationScene(
                 continue;
             }
 
+            const bool broadleaf =
+                height < 700.0F &&
+                unitHash(cellSeed ^ 0x99ULL) < 0.34F;
             scene.instances.push_back({
                 {x, height, z},
                 5.8F + unitHash(cellSeed ^ 0x44ULL) * 8.2F,
@@ -184,6 +257,7 @@ VegetationScene buildVegetationScene(
                 unitHash(cellSeed ^ 0x66ULL) * 2.0F * std::numbers::pi_v<float>,
                 unitHash(cellSeed ^ 0x77ULL) * 2.0F * std::numbers::pi_v<float>,
                 unitHash(cellSeed ^ 0x88ULL),
+                broadleaf ? 1U : 0U,
             });
         }
     }
@@ -201,6 +275,7 @@ VegetationScene buildVegetationScene(
         hashCombine(fingerprint, tree.yawRadians);
         hashCombine(fingerprint, tree.windPhase);
         hashCombine(fingerprint, tree.colorVariant);
+        hashCombine(fingerprint, static_cast<std::uint64_t>(tree.prototypeIndex));
     }
     scene.fingerprint = fingerprint;
     return scene;

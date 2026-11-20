@@ -1,6 +1,7 @@
 #include "metal_app.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -635,8 +636,9 @@ int runMetalApp(const MetalAppOptions& options) {
         const CombinedMesh mesh = combineMesh(scene);
         const VegetationScene vegetation =
             buildVegetationScene(simulation.world());
-        std::vector<GpuTreeInstance> gpuTrees;
-        gpuTrees.reserve(vegetation.instances.size());
+        std::array<std::vector<GpuTreeInstance>, 2> gpuTrees;
+        gpuTrees[0].reserve(vegetation.instances.size());
+        gpuTrees[1].reserve(vegetation.instances.size() / 3);
         for (const TreeInstance& tree : vegetation.instances) {
             GpuTreeInstance gpuTree;
             gpuTree.positionAndHeight[0] = tree.position.x;
@@ -647,7 +649,7 @@ int runMetalApp(const MetalAppOptions& options) {
             gpuTree.parameters[1] = tree.canopyRadiusMeters;
             gpuTree.parameters[2] = tree.windPhase;
             gpuTree.parameters[3] = tree.colorVariant;
-            gpuTrees.push_back(gpuTree);
+            gpuTrees[tree.prototypeIndex].push_back(gpuTree);
         }
         id<MTLBuffer> vertexBuffer = [device
             newBufferWithBytes:mesh.vertices.data()
@@ -657,30 +659,33 @@ int runMetalApp(const MetalAppOptions& options) {
             newBufferWithBytes:mesh.indices.data()
                        length:mesh.indices.size() * sizeof(std::uint32_t)
                       options:MTLResourceStorageModeShared];
-        id<MTLBuffer> treeVertexBuffer = nil;
-        id<MTLBuffer> treeIndexBuffer = nil;
-        id<MTLBuffer> treeInstanceBuffer = nil;
-        if (!vegetation.prototype.vertices.empty() &&
-            !vegetation.prototype.indices.empty() &&
-            !gpuTrees.empty()) {
-            treeVertexBuffer = [device
-                newBufferWithBytes:vegetation.prototype.vertices.data()
-                           length:vegetation.prototype.vertices.size() *
-                                  sizeof(RenderVertex)
+        std::array<id<MTLBuffer>, 2> treeVertexBuffers = {nil, nil};
+        std::array<id<MTLBuffer>, 2> treeIndexBuffers = {nil, nil};
+        std::array<id<MTLBuffer>, 2> treeInstanceBuffers = {nil, nil};
+        for (std::size_t type = 0; type < vegetation.prototypes.size(); ++type) {
+            const RenderMesh& prototype = vegetation.prototypes[type];
+            if (prototype.vertices.empty() || prototype.indices.empty() ||
+                gpuTrees[type].empty()) {
+                continue;
+            }
+            treeVertexBuffers[type] = [device
+                newBufferWithBytes:prototype.vertices.data()
+                           length:prototype.vertices.size() * sizeof(RenderVertex)
                           options:MTLResourceStorageModeShared];
-            treeIndexBuffer = [device
-                newBufferWithBytes:vegetation.prototype.indices.data()
-                           length:vegetation.prototype.indices.size() *
-                                  sizeof(std::uint32_t)
+            treeIndexBuffers[type] = [device
+                newBufferWithBytes:prototype.indices.data()
+                           length:prototype.indices.size() * sizeof(std::uint32_t)
                           options:MTLResourceStorageModeShared];
-            treeInstanceBuffer = [device
-                newBufferWithBytes:gpuTrees.data()
-                           length:gpuTrees.size() * sizeof(GpuTreeInstance)
+            treeInstanceBuffers[type] = [device
+                newBufferWithBytes:gpuTrees[type].data()
+                           length:gpuTrees[type].size() * sizeof(GpuTreeInstance)
                           options:MTLResourceStorageModeShared];
         }
         if (vertexBuffer == nil || indexBuffer == nil ||
-            treeVertexBuffer == nil || treeIndexBuffer == nil ||
-            treeInstanceBuffer == nil) {
+            treeVertexBuffers[0] == nil || treeIndexBuffers[0] == nil ||
+            treeInstanceBuffers[0] == nil ||
+            treeVertexBuffers[1] == nil || treeIndexBuffers[1] == nil ||
+            treeInstanceBuffers[1] == nil) {
             std::cerr << "Failed to upload render mesh\n";
             return 1;
         }
@@ -874,14 +879,23 @@ int runMetalApp(const MetalAppOptions& options) {
                                                          sizeof(std::uint32_t)];
                 }
                 [shadowEncoder setRenderPipelineState:treeShadowPipeline];
-                [shadowEncoder setVertexBuffer:treeVertexBuffer offset:0 atIndex:0];
-                [shadowEncoder setVertexBuffer:treeInstanceBuffer offset:0 atIndex:2];
-                [shadowEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                                          indexCount:vegetation.prototype.indices.size()
-                                           indexType:MTLIndexTypeUInt32
-                                         indexBuffer:treeIndexBuffer
-                                   indexBufferOffset:0
-                                       instanceCount:gpuTrees.size()];
+                for (std::size_t type = 0;
+                     type < vegetation.prototypes.size();
+                     ++type) {
+                    [shadowEncoder setVertexBuffer:treeVertexBuffers[type]
+                                            offset:0
+                                           atIndex:0];
+                    [shadowEncoder setVertexBuffer:treeInstanceBuffers[type]
+                                            offset:0
+                                           atIndex:2];
+                    [shadowEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                              indexCount:
+                                                  vegetation.prototypes[type].indices.size()
+                                               indexType:MTLIndexTypeUInt32
+                                             indexBuffer:treeIndexBuffers[type]
+                                       indexBufferOffset:0
+                                           instanceCount:gpuTrees[type].size()];
+                }
                 [shadowEncoder endEncoding];
 
                 MTLRenderPassDescriptor* pass =
@@ -953,8 +967,6 @@ int runMetalApp(const MetalAppOptions& options) {
                 [encoder setRenderPipelineState:treePipeline];
                 [encoder setDepthStencilState:terrainDepthState];
                 [encoder setCullMode:MTLCullModeNone];
-                [encoder setVertexBuffer:treeVertexBuffer offset:0 atIndex:0];
-                [encoder setVertexBuffer:treeInstanceBuffer offset:0 atIndex:2];
                 [encoder setVertexBytes:&treeUniforms
                                  length:sizeof(treeUniforms)
                                 atIndex:1];
@@ -962,12 +974,23 @@ int runMetalApp(const MetalAppOptions& options) {
                                    length:sizeof(treeUniforms)
                                   atIndex:1];
                 [encoder setFragmentTexture:shadowTexture atIndex:1];
-                [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                                    indexCount:vegetation.prototype.indices.size()
-                                     indexType:MTLIndexTypeUInt32
-                                   indexBuffer:treeIndexBuffer
-                             indexBufferOffset:0
-                                 instanceCount:gpuTrees.size()];
+                for (std::size_t type = 0;
+                     type < vegetation.prototypes.size();
+                     ++type) {
+                    [encoder setVertexBuffer:treeVertexBuffers[type]
+                                      offset:0
+                                     atIndex:0];
+                    [encoder setVertexBuffer:treeInstanceBuffers[type]
+                                      offset:0
+                                     atIndex:2];
+                    [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                        indexCount:
+                                            vegetation.prototypes[type].indices.size()
+                                         indexType:MTLIndexTypeUInt32
+                                       indexBuffer:treeIndexBuffers[type]
+                                 indexBufferOffset:0
+                                     instanceCount:gpuTrees[type].size()];
+                }
 
                 [encoder endEncoding];
 
@@ -1224,7 +1247,9 @@ int runMetalApp(const MetalAppOptions& options) {
                   << "terrain_chunks=" << scene.terrainChunks.size() << '\n'
                   << "combined_vertices=" << mesh.vertices.size() << '\n'
                   << "combined_indices=" << mesh.indices.size() << '\n'
-                  << "tree_instances=" << gpuTrees.size() << '\n';
+                  << "tree_instances=" << vegetation.instances.size() << '\n'
+                  << "conifer_instances=" << gpuTrees[0].size() << '\n'
+                  << "broadleaf_instances=" << gpuTrees[1].size() << '\n';
         if (captureSucceeded && !options.capturePath.empty()) {
             std::cout << "capture=" << options.capturePath << '\n';
         }
