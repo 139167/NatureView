@@ -98,6 +98,31 @@ RenderMesh createConiferPrototype() {
             const Vec3 top = {0.0F, tier.top, 0.0F};
             appendTriangle(mesh, base0, top, base1, 1.0F);
         }
+        for (int card = 0; card < 3; ++card) {
+            const float angle =
+                static_cast<float>(card) * std::numbers::pi_v<float> / 3.0F;
+            const Vec3 center = {
+                0.0F,
+                (tier.base + tier.top) * 0.5F,
+                0.0F,
+            };
+            const Vec3 right = {
+                std::cos(angle) * tier.radius * 0.68F,
+                0.0F,
+                std::sin(angle) * tier.radius * 0.68F,
+            };
+            const Vec3 up = {
+                0.0F,
+                (tier.top - tier.base) * 0.68F,
+                0.0F,
+            };
+            const Vec3 a = center - right - up;
+            const Vec3 b = center + right - up;
+            const Vec3 c = center + right + up;
+            const Vec3 d = center - right + up;
+            appendTriangle(mesh, a, b, c, 2.0F);
+            appendTriangle(mesh, a, c, d, 2.0F);
+        }
     }
 
     mesh.bounds = {
@@ -133,6 +158,22 @@ void appendCanopyCluster(
             positions[face[1]],
             positions[face[2]],
             1.0F);
+    }
+    for (int card = 0; card < 3; ++card) {
+        const float angle =
+            static_cast<float>(card) * std::numbers::pi_v<float> / 3.0F;
+        const Vec3 right = {
+            std::cos(angle) * radius.x * 0.96F,
+            0.0F,
+            std::sin(angle) * radius.x * 0.96F,
+        };
+        const Vec3 up = {0.0F, radius.y * 1.18F, 0.0F};
+        const Vec3 a = center - right - up * 0.35F;
+        const Vec3 b = center + right - up * 0.35F;
+        const Vec3 c = center + right + up;
+        const Vec3 d = center - right + up;
+        appendTriangle(mesh, a, b, c, 2.0F);
+        appendTriangle(mesh, a, c, d, 2.0F);
     }
 }
 

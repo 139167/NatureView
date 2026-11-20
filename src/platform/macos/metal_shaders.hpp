@@ -79,6 +79,12 @@ struct ShadowOut {
     float4 position [[position]];
 };
 
+struct TreeShadowOut {
+    float4 position [[position]];
+    float3 worldPosition;
+    float materialKind;
+};
+
 struct TreeInstance {
     float4 positionAndHeight;
     float4 parameters;
@@ -150,6 +156,16 @@ float cloudShadowVisibility(
 {
     float density = cloudDensity(worldPosition * 0.0014, time, coverage);
     return 1.0 - density * 0.34;
+}
+
+float leafCardMask(float3 worldPosition)
+{
+    float2 coordinates = float2(
+        dot(worldPosition.xz, float2(0.83, 0.55)),
+        worldPosition.y * 1.9);
+    float broad = valueNoise(coordinates * 4.2 + float2(3.4, 8.7));
+    float fine = valueNoise(coordinates * 11.7 + float2(13.1, 2.2));
+    return saturate((broad + fine * 0.55) / 1.55);
 }
 
 vertex VertexOut terrainVertex(
@@ -239,7 +255,7 @@ vertex VertexOut treeVertex(
     return out;
 }
 
-vertex ShadowOut treeShadowVertex(
+vertex TreeShadowOut treeShadowVertex(
     VertexIn in [[stage_in]],
     constant Uniforms& uniforms [[buffer(1)]],
     constant TreeInstance* instances [[buffer(2)]],
@@ -247,10 +263,20 @@ vertex ShadowOut treeShadowVertex(
 {
     TreeInstance instance = instances[instanceID];
     TreeTransform transformed = transformTree(in, instance, uniforms);
-    ShadowOut out;
+    TreeShadowOut out;
     out.position =
         uniforms.lightViewProjection * float4(transformed.position, 1.0);
+    out.worldPosition = transformed.position;
+    out.materialKind = in.uv.x;
     return out;
+}
+
+fragment void treeShadowFragment(TreeShadowOut in [[stage_in]])
+{
+    if (in.materialKind > 1.5 &&
+        leafCardMask(in.worldPosition) < 0.53) {
+        discard_fragment();
+    }
 }
 
 vertex SkyOut skyVertex(uint vertexID [[vertex_id]])
@@ -721,6 +747,9 @@ fragment float4 terrainFragment(
     float3 color;
 
     if (uniforms.settings.x > 1.5) {
+        if (in.uv.x > 1.5 && leafCardMask(in.worldPosition) < 0.53) {
+            discard_fragment();
+        }
         float3 normal = normalize(in.normal);
         float3 bark = mix(
             float3(0.055, 0.034, 0.020),

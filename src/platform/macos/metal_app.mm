@@ -566,7 +566,7 @@ int runMetalApp(const MetalAppOptions& options) {
             shaderLibrary,
             @"NatureView tree shadows",
             @"treeShadowVertex",
-            nil,
+            @"treeShadowFragment",
             MTLPixelFormatInvalid,
             depthFormat,
             terrainVertexDescriptor);
