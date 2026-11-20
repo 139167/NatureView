@@ -21,6 +21,7 @@
 - 纬度、夜间、云量与天气驱动的极光活动状态和多层 HDR 帘幕；
 - 风、阵风、植被、河流与雨的统一声景参数映射和确定性 WAV 渲染；
 - macOS AVAudioEngine 实时双声道输出与采样级参数平滑；
+- Metal 场景和实时声景共用同一模拟、更新与退出生命周期；
 - 世界与模拟确定性自动测试。
 
 当前不包含植被几何、场景级水面反射与折射、现场录音素材、空间声源与最终混音、完整球面极光大气散射、资源管线与桌面壁纸宿主。这些属于后续里程碑。
@@ -70,6 +71,7 @@ ctest --test-dir build --output-on-failure
 ```
 
 音频回调持续读取原子化的 Soundscape 参数，并在采样级平滑，避免天气变化时音量跳变。
+`natureview_metal` 默认同时播放实时声景；截图和自动测试使用 `--mute`。
 
 ### Windows D3D12
 
@@ -100,7 +102,7 @@ cmake --build build --parallel
 
 ```sh
 ./build/natureview_metal --frames 1 --seconds 60 \
-  --width 960 --height 540 --capture build/metal-frame.ppm
+  --width 960 --height 540 --mute --capture build/metal-frame.ppm
 ```
 
 捕获文件会由结构化 PPM 测试检查尺寸、颜色变化、植被和天空/水面区域。
@@ -110,7 +112,7 @@ cmake --build build --parallel
 
 ```sh
 ./build/natureview_metal --seed 22 --frames 1 --seconds 60 \
-  --width 960 --height 540 --capture build/aurora-volume-v1.ppm
+  --width 960 --height 540 --mute --capture build/aurora-volume-v1.ppm
 ```
 
 ## 结构

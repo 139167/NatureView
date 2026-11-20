@@ -11,6 +11,7 @@ struct MetalAppOptions {
     std::uint32_t height = 720;
     std::uint32_t frameLimit = 0;
     double prewarmSeconds = 0.0;
+    bool audioEnabled = true;
     std::string capturePath;
 };
 

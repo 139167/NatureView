@@ -104,6 +104,28 @@ endif()
 if(APPLE)
     enable_language(OBJCXX)
 
+    add_library(nature_macos_audio
+        src/platform/macos/audio_engine.mm
+    )
+
+    target_compile_features(nature_macos_audio PUBLIC cxx_std_20)
+    target_include_directories(nature_macos_audio PUBLIC src/platform/macos)
+    target_compile_options(nature_macos_audio PRIVATE
+        -fobjc-arc
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    if(NATUREVIEW_WARNINGS_AS_ERRORS)
+        target_compile_options(nature_macos_audio PRIVATE -Werror)
+    endif()
+    target_link_libraries(nature_macos_audio PUBLIC
+        nature_audio
+        "-framework Foundation"
+        "-framework AVFoundation"
+        "-framework AudioToolbox"
+    )
+
     add_executable(natureview_metal
         src/platform/macos/metal_app.mm
         tools/macos/metal_main.cpp
@@ -122,13 +144,13 @@ if(APPLE)
     endif()
     target_link_libraries(natureview_metal PRIVATE
         nature_preview
+        nature_macos_audio
         "-framework Cocoa"
         "-framework Metal"
         "-framework QuartzCore"
     )
 
     add_executable(natureview_audio_demo
-        src/platform/macos/audio_engine.mm
         tools/macos/audio_live_demo.cpp
     )
 
@@ -143,12 +165,7 @@ if(APPLE)
     if(NATUREVIEW_WARNINGS_AS_ERRORS)
         target_compile_options(natureview_audio_demo PRIVATE -Werror)
     endif()
-    target_link_libraries(natureview_audio_demo PRIVATE
-        nature_audio
-        "-framework Foundation"
-        "-framework AVFoundation"
-        "-framework AudioToolbox"
-    )
+    target_link_libraries(natureview_audio_demo PRIVATE nature_macos_audio)
 endif()
 
 include(CTest)
@@ -177,7 +194,7 @@ if(BUILD_TESTING)
     if(APPLE)
         add_test(
             NAME metal_scene_smoke
-            COMMAND natureview_metal --smoke --frames 3 --width 480 --height 270
+            COMMAND natureview_metal --mute --smoke --frames 3 --width 480 --height 270
         )
         set_tests_properties(metal_scene_smoke PROPERTIES TIMEOUT 30)
 
@@ -188,6 +205,7 @@ if(BUILD_TESTING)
                 --seconds 30
                 --width 320
                 --height 180
+                --mute
                 --capture ${CMAKE_CURRENT_BINARY_DIR}/metal-scene.ppm
         )
         set_tests_properties(metal_scene_capture PROPERTIES
@@ -213,6 +231,7 @@ if(BUILD_TESTING)
                 --seconds 60
                 --width 320
                 --height 180
+                --mute
                 --capture ${CMAKE_CURRENT_BINARY_DIR}/metal-night.ppm
         )
         set_tests_properties(metal_night_capture PROPERTIES

@@ -11,7 +11,7 @@ namespace {
 void printUsage(std::ostream& output) {
     output << "Usage: natureview_metal [--smoke] [--frames N] "
               "[--seconds N] [--seed N] [--width N] [--height N] "
-              "[--capture FILE.ppm]\n";
+              "[--capture FILE.ppm] [--mute]\n";
 }
 
 }  // namespace
@@ -29,6 +29,10 @@ int main(int argc, char** argv) {
             if (options.frameLimit == 0) {
                 options.frameLimit = 3;
             }
+            continue;
+        }
+        if (argument == "--mute") {
+            options.audioEnabled = false;
             continue;
         }
         if (index + 1 >= argc) {

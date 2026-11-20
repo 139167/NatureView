@@ -16,7 +16,9 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 
+#include "audio_engine.hpp"
 #include "metal_shaders.hpp"
+#include "nature/audio/soundscape.hpp"
 #include "nature/core/math.hpp"
 #include "nature/core/simulation.hpp"
 #include "nature/render/preview_renderer.hpp"
@@ -532,6 +534,21 @@ int runMetalApp(const MetalAppOptions& options) {
         [window makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
 
+        const SoundscapeDirector soundscapeDirector;
+        MacAudioEngine audioEngine;
+        bool audioStarted = false;
+        if (options.audioEnabled) {
+            audioStarted = audioEngine.start(
+                soundscapeDirector.evaluate(
+                    simulation.environment(),
+                    simulation.camera(),
+                    simulation.world()),
+                options.seed);
+            if (!audioStarted) {
+                std::cerr << "Warning: continuing without audio output\n";
+            }
+        }
+
         dispatch_semaphore_t inFlight = dispatch_semaphore_create(2);
         id<MTLTexture> depthTexture = nil;
         id<MTLTexture> hdrTexture = nil;
@@ -560,6 +577,13 @@ int runMetalApp(const MetalAppOptions& options) {
                     : (renderedFrames == 0 ? 0.0 : 1.0 / 60.0);
                 previousFrameTime = currentFrameTime;
                 simulation.advance(deltaSeconds);
+                if (audioStarted) {
+                    audioEngine.update(
+                        soundscapeDirector.evaluate(
+                            simulation.environment(),
+                            simulation.camera(),
+                            simulation.world()));
+                }
 
                 const NSRect backingBounds = [contentView convertRectToBacking:contentView.bounds];
                 metalLayer.drawableSize = backingBounds.size;
@@ -794,6 +818,10 @@ int runMetalApp(const MetalAppOptions& options) {
             std::this_thread::sleep_for(std::chrono::milliseconds(16));
         }
 
+        if (audioStarted) {
+            audioEngine.stop();
+        }
+
         if (lastCommandBuffer != nil) {
             [lastCommandBuffer waitUntilCompleted];
             if (lastCommandBuffer.status == MTLCommandBufferStatusError) {
@@ -819,6 +847,7 @@ int runMetalApp(const MetalAppOptions& options) {
         std::cout << "metal_device=" << [[device name] UTF8String] << '\n'
                   << "seed=" << options.seed << '\n'
                   << "rendered_frames=" << renderedFrames << '\n'
+                  << "audio_started=" << (audioStarted ? "true" : "false") << '\n'
                   << "simulation_seconds=" << simulation.elapsedSeconds() << '\n'
                   << "terrain_chunks=" << scene.terrainChunks.size() << '\n'
                   << "combined_vertices=" << mesh.vertices.size() << '\n'
