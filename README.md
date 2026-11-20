@@ -25,9 +25,10 @@
 - 确定性针叶林撒布、GPU 实例、统一风摆和树影；
 - 半分辨率 HDR Bloom、film-like 色彩分级、暗角与方向性空气散射；
 - 5×5 PCF 方向光软阴影和半分辨率屏幕空间环境光遮蔽；
+- 上一帧 HDR/深度驱动的河面屏幕空间反射与天空回退；
 - 世界与模拟确定性自动测试。
 
-当前不包含高密度森林 LOD、叶片透光与细枝动态、草地、场景级水面反射与折射、现场录音素材、空间声源与最终混音、完整球面极光大气散射、资源管线与桌面壁纸宿主。这些属于后续里程碑。
+当前不包含高密度森林 LOD、叶片透光与细枝动态、草地、高精度水深折射、平面反射回退、现场录音素材、空间声源与最终混音、完整球面极光大气散射、资源管线与桌面壁纸宿主。这些属于后续里程碑。
 
 ## 构建
 
@@ -104,7 +105,7 @@ cmake --build build --parallel
 捕获视频渲染器的实际像素：
 
 ```sh
-./build/natureview_metal --frames 1 --seconds 60 \
+./build/natureview_metal --frames 2 --seconds 60 \
   --width 960 --height 540 --mute --capture build/metal-frame.ppm
 ```
 
@@ -114,7 +115,7 @@ cmake --build build --parallel
 夜间极光验证：
 
 ```sh
-./build/natureview_metal --seed 22 --frames 1 --seconds 60 \
+./build/natureview_metal --seed 22 --frames 2 --seconds 60 \
   --width 960 --height 540 --mute --capture build/aurora-volume-v1.ppm
 ```
 
@@ -131,7 +132,7 @@ tests/                 确定性与连续性测试
 
 当前优先完成 macOS 光影与环境系统：
 
-1. 水面场景反射、水深与折射修正；
+1. 水面 SSR 精修、水深折射与局部平面反射；
 2. 极光云层遮挡、大气消光与更长时间尺度演变；
 3. 森林 LOD、叶片透光、细枝动态与摄影测量树资产；
 4. 现场录音环境床、空间声源、遮挡与混响；

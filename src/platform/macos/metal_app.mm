@@ -44,6 +44,7 @@ struct alignas(16) FrameUniforms {
     Matrix4 lightViewProjection;
     float shadowSettings[4]{};
     float windSettings[4]{};
+    float waterSettings[4]{};
 };
 
 struct alignas(16) GpuTreeInstance {
@@ -241,6 +242,10 @@ FrameUniforms frameUniforms(
         clamp(environment.windSpeedMetersPerSecond / 11.0F, 0.0F, 1.0F);
     uniforms.windSettings[2] = environment.gustFactor;
     uniforms.windSettings[3] = 0.0F;
+    uniforms.waterSettings[0] = 0.0F;
+    uniforms.waterSettings[1] = 0.1F;
+    uniforms.waterSettings[2] = 8000.0F;
+    uniforms.waterSettings[3] = 0.88F;
     return uniforms;
 }
 
@@ -722,9 +727,11 @@ int runMetalApp(const MetalAppOptions& options) {
             }
         }
 
-        dispatch_semaphore_t inFlight = dispatch_semaphore_create(2);
+        dispatch_semaphore_t inFlight = dispatch_semaphore_create(1);
         id<MTLTexture> depthTexture = nil;
         id<MTLTexture> hdrTexture = nil;
+        id<MTLTexture> reflectionColorHistory = nil;
+        id<MTLTexture> reflectionDepthHistory = nil;
         id<MTLTexture> ssaoTexture = nil;
         id<MTLTexture> bloomTextureA = nil;
         id<MTLTexture> bloomTextureB = nil;
@@ -733,6 +740,7 @@ int runMetalApp(const MetalAppOptions& options) {
         NSUInteger capturedBytesPerRow = 0;
         NSUInteger capturedWidth = 0;
         NSUInteger capturedHeight = 0;
+        bool reflectionHistoryValid = false;
         std::uint32_t renderedFrames = 0;
         bool failed = false;
         auto previousFrameTime = std::chrono::steady_clock::now();
@@ -792,6 +800,11 @@ int runMetalApp(const MetalAppOptions& options) {
                     hdrTexture.height != drawableHeight) {
                     hdrTexture =
                         createHdrTexture(device, drawableWidth, drawableHeight);
+                    reflectionColorHistory =
+                        createHdrTexture(device, drawableWidth, drawableHeight);
+                    reflectionDepthHistory =
+                        createDepthTexture(device, drawableWidth, drawableHeight);
+                    reflectionHistoryValid = false;
                     const NSUInteger bloomWidth =
                         std::max<NSUInteger>(1, drawableWidth / 2);
                     const NSUInteger bloomHeight =
@@ -802,6 +815,16 @@ int runMetalApp(const MetalAppOptions& options) {
                         createHdrTexture(device, bloomWidth, bloomHeight);
                     ssaoTexture =
                         createSsaoTexture(device, bloomWidth, bloomHeight);
+                }
+                if (reflectionColorHistory == nil ||
+                    reflectionDepthHistory == nil ||
+                    ssaoTexture == nil ||
+                    bloomTextureA == nil ||
+                    bloomTextureB == nil) {
+                    std::cerr << "Failed to create post-processing textures\n";
+                    failed = true;
+                    dispatch_semaphore_signal(inFlight);
+                    break;
                 }
 
                 const float aspectRatio =
@@ -890,6 +913,8 @@ int runMetalApp(const MetalAppOptions& options) {
                                    length:sizeof(terrainUniforms)
                                   atIndex:1];
                 [encoder setFragmentTexture:shadowTexture atIndex:1];
+                [encoder setFragmentTexture:reflectionColorHistory atIndex:2];
+                [encoder setFragmentTexture:reflectionDepthHistory atIndex:3];
                 [encoder drawPrimitives:MTLPrimitiveTypeTriangle
                             vertexStart:0
                             vertexCount:3];
@@ -948,6 +973,8 @@ int runMetalApp(const MetalAppOptions& options) {
                     aspectRatio,
                     1.0F,
                     simulation.environment().fogDensityPerMeter);
+                riverUniforms.waterSettings[0] =
+                    reflectionHistoryValid ? 1.0F : 0.0F;
                 [encoder setRenderPipelineState:terrainPipeline];
                 [encoder setCullMode:MTLCullModeNone];
                 [encoder setVertexBuffer:vertexBuffer offset:0 atIndex:0];
@@ -964,6 +991,15 @@ int runMetalApp(const MetalAppOptions& options) {
                              indexBufferOffset:mesh.riverRange.indexOffset *
                                                sizeof(std::uint32_t)];
                 [encoder endEncoding];
+
+                id<MTLBlitCommandEncoder> historyEncoder =
+                    [commandBuffer blitCommandEncoder];
+                [historyEncoder copyFromTexture:hdrTexture
+                                     toTexture:reflectionColorHistory];
+                [historyEncoder copyFromTexture:depthTexture
+                                     toTexture:reflectionDepthHistory];
+                [historyEncoder endEncoding];
+                reflectionHistoryValid = true;
 
                 const MTLViewport bloomViewport{
                     0.0,

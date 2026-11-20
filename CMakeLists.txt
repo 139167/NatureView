@@ -206,7 +206,7 @@ if(BUILD_TESTING)
         add_test(
             NAME metal_scene_capture
             COMMAND natureview_metal
-                --frames 1
+                --frames 2
                 --seconds 30
                 --width 320
                 --height 180
@@ -232,7 +232,7 @@ if(BUILD_TESTING)
             NAME metal_night_capture
             COMMAND natureview_metal
                 --seed 22
-                --frames 1
+                --frames 2
                 --seconds 60
                 --width 320
                 --height 180

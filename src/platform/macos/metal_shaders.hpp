@@ -24,6 +24,7 @@ struct Uniforms {
     float4x4 lightViewProjection;
     float4 shadowSettings;
     float4 windSettings;
+    float4 waterSettings;
 };
 
 struct TonemapUniforms {
@@ -329,6 +330,100 @@ float3 skyRadiance(
     return color;
 }
 
+float3 reconstructWaterDepth(
+    float2 uv,
+    float depth,
+    constant Uniforms& uniforms)
+{
+    float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    float tangent = uniforms.skySettings.x;
+    float aspect = uniforms.skySettings.y;
+    float3 ray = normalize(
+        uniforms.cameraForward.xyz +
+        uniforms.cameraRight.xyz * ndc.x * tangent * aspect +
+        uniforms.cameraUp.xyz * ndc.y * tangent);
+    float nearPlane = uniforms.waterSettings.y;
+    float farPlane = uniforms.waterSettings.z;
+    float viewZ =
+        -(nearPlane * farPlane) /
+        (farPlane + depth * (nearPlane - farPlane));
+    float forwardAmount = max(dot(ray, uniforms.cameraForward.xyz), 0.05);
+    return uniforms.cameraPosition.xyz + ray * (-viewZ / forwardAmount);
+}
+
+float3 screenSpaceReflection(
+    float3 origin,
+    float3 reflectedDirection,
+    constant Uniforms& uniforms,
+    texture2d<float> sceneColor,
+    depth2d<float> sceneDepth)
+{
+    constexpr sampler colorSampler(
+        coord::normalized,
+        address::clamp_to_edge,
+        filter::linear);
+    constexpr sampler depthSampler(
+        coord::normalized,
+        address::clamp_to_edge,
+        filter::nearest);
+    if (uniforms.waterSettings.x < 0.5) {
+        return skyRadiance(
+            reflectedDirection,
+            normalize(uniforms.sunDirection.xyz),
+            uniforms.skySettings.z,
+            uniforms.skySettings.w,
+            uniforms.settings.w,
+            uniforms.settings.z);
+    }
+
+    float stepSize = 5.0;
+    for (int step = 0; step < 16; ++step) {
+        float3 position = origin + reflectedDirection * stepSize;
+        stepSize *= 1.22;
+        float4 clip = uniforms.viewProjection * float4(position, 1.0);
+        if (clip.w <= 0.0) {
+            break;
+        }
+        float2 uv = float2(
+            clip.x / clip.w * 0.5 + 0.5,
+            0.5 - clip.y / clip.w * 0.5);
+        if (any(uv < 0.0) || any(uv > 1.0)) {
+            break;
+        }
+        float rayDepth = clip.z / clip.w;
+        float sampledDepth = sceneDepth.sample(depthSampler, uv);
+        if (sampledDepth >= 0.9999) {
+            continue;
+        }
+        float depthDifference = rayDepth - sampledDepth;
+        if (depthDifference >= 0.0 && depthDifference < 0.035) {
+            float edgeFade =
+                smoothstep(0.0, 0.08, uv.x) *
+                (1.0 - smoothstep(0.92, 1.0, uv.x)) *
+                smoothstep(0.0, 0.08, uv.y) *
+                (1.0 - smoothstep(0.92, 1.0, uv.y));
+            float3 skyFallback = skyRadiance(
+                reflectedDirection,
+                normalize(uniforms.sunDirection.xyz),
+                uniforms.skySettings.z,
+                uniforms.skySettings.w,
+                uniforms.settings.w,
+                uniforms.settings.z);
+            return mix(
+                skyFallback,
+                sceneColor.sample(colorSampler, uv).rgb,
+                edgeFade);
+        }
+    }
+    return skyRadiance(
+        reflectedDirection,
+        normalize(uniforms.sunDirection.xyz),
+        uniforms.skySettings.z,
+        uniforms.skySettings.w,
+        uniforms.settings.w,
+        uniforms.settings.z);
+}
+
 fragment float4 skyFragment(
     SkyOut in [[stage_in]],
     constant Uniforms& uniforms [[buffer(1)]])
@@ -567,7 +662,9 @@ fragment float4 tonemapFragment(
 fragment float4 terrainFragment(
     VertexOut in [[stage_in]],
     constant Uniforms& uniforms [[buffer(1)]],
-    depth2d<float> shadowMap [[texture(1)]])
+    depth2d<float> shadowMap [[texture(1)]],
+    texture2d<float> reflectionColor [[texture(2)]],
+    depth2d<float> reflectionDepth [[texture(3)]])
 {
     float3 sunDirection = normalize(uniforms.sunDirection.xyz);
     float distanceToCamera = length(in.worldPosition - uniforms.cameraPosition.xyz);
@@ -643,13 +740,12 @@ fragment float4 terrainFragment(
         float3 reflected = reflect(viewDirection, normal);
         float fresnel = 0.02 + 0.98 * pow(
             1.0 - saturate(dot(viewDirection, normal)), 5.0);
-        float3 reflection = skyRadiance(
+        float3 reflection = screenSpaceReflection(
+            in.worldPosition,
             reflected,
-            sunDirection,
-            uniforms.skySettings.z,
-            uniforms.skySettings.w,
-            uniforms.settings.w,
-            time);
+            uniforms,
+            reflectionColor,
+            reflectionDepth);
 
         float edge = abs(in.uv.x * 2.0 - 1.0);
         float depthVariation = fbm(float2(
