@@ -35,6 +35,7 @@ endif()
 add_library(nature_preview
     src/preview_renderer.cpp
     src/render_scene.cpp
+    src/vegetation_scene.cpp
 )
 
 target_compile_features(nature_preview PUBLIC cxx_std_20)
@@ -186,6 +187,10 @@ if(BUILD_TESTING)
     add_executable(audio_tests tests/audio_tests.cpp)
     target_link_libraries(audio_tests PRIVATE nature_audio)
     add_test(NAME audio_tests COMMAND audio_tests)
+
+    add_executable(vegetation_tests tests/vegetation_tests.cpp)
+    target_link_libraries(vegetation_tests PRIVATE nature_preview)
+    add_test(NAME vegetation_tests COMMAND vegetation_tests)
 
     if(WIN32)
         add_test(NAME dx12_probe COMMAND natureview_dx12_probe)

@@ -23,6 +23,7 @@ struct Uniforms {
     float4 skySettings;
     float4x4 lightViewProjection;
     float4 shadowSettings;
+    float4 windSettings;
 };
 
 struct TonemapUniforms {
@@ -48,6 +49,16 @@ struct TonemapOut {
 
 struct ShadowOut {
     float4 position [[position]];
+};
+
+struct TreeInstance {
+    float4 positionAndHeight;
+    float4 parameters;
+};
+
+struct TreeTransform {
+    float3 position;
+    float3 normal;
 };
 
 float hash21(float2 position)
@@ -104,6 +115,84 @@ vertex ShadowOut shadowVertex(
 {
     ShadowOut out;
     out.position = uniforms.lightViewProjection * float4(in.position, 1.0);
+    return out;
+}
+
+TreeTransform transformTree(
+    VertexIn in,
+    TreeInstance instance,
+    constant Uniforms& uniforms)
+{
+    float yaw = instance.parameters.x;
+    float radius = instance.parameters.y;
+    float phase = instance.parameters.z;
+    float3 local = float3(
+        in.position.x * radius,
+        in.position.y * instance.positionAndHeight.w,
+        in.position.z * radius);
+    float cosine = cos(yaw);
+    float sine = sin(yaw);
+    float3 rotated = float3(
+        local.x * cosine - local.z * sine,
+        local.y,
+        local.x * sine + local.z * cosine);
+    float3 normal = normalize(float3(
+        in.normal.x * cosine - in.normal.z * sine,
+        in.normal.y,
+        in.normal.x * sine + in.normal.z * cosine));
+
+    float3 worldPosition = instance.positionAndHeight.xyz + rotated;
+    float windDirection = uniforms.windSettings.x;
+    float2 wind = float2(cos(windDirection), sin(windDirection));
+    float2 crossWind = float2(-wind.y, wind.x);
+    float heightWeight = pow(saturate(in.position.y), 1.7);
+    float windStrength =
+        uniforms.windSettings.y * saturate(uniforms.windSettings.z);
+    float oscillation = sin(
+        uniforms.settings.z * 1.35 +
+        phase +
+        dot(worldPosition.xz, float2(0.006, 0.004)));
+    float bend =
+        heightWeight * instance.positionAndHeight.w *
+        (0.025 + windStrength * 0.090);
+    worldPosition.xz +=
+        wind * bend * (0.65 + oscillation * 0.35) +
+        crossWind * bend * oscillation * 0.24;
+
+    TreeTransform result;
+    result.position = worldPosition;
+    result.normal = normal;
+    return result;
+}
+
+vertex VertexOut treeVertex(
+    VertexIn in [[stage_in]],
+    constant Uniforms& uniforms [[buffer(1)]],
+    constant TreeInstance* instances [[buffer(2)]],
+    uint instanceID [[instance_id]])
+{
+    TreeInstance instance = instances[instanceID];
+    TreeTransform transformed = transformTree(in, instance, uniforms);
+    VertexOut out;
+    out.position =
+        uniforms.viewProjection * float4(transformed.position, 1.0);
+    out.worldPosition = transformed.position;
+    out.normal = transformed.normal;
+    out.uv = float2(in.uv.x, instance.parameters.w);
+    return out;
+}
+
+vertex ShadowOut treeShadowVertex(
+    VertexIn in [[stage_in]],
+    constant Uniforms& uniforms [[buffer(1)]],
+    constant TreeInstance* instances [[buffer(2)]],
+    uint instanceID [[instance_id]])
+{
+    TreeInstance instance = instances[instanceID];
+    TreeTransform transformed = transformTree(in, instance, uniforms);
+    ShadowOut out;
+    out.position =
+        uniforms.lightViewProjection * float4(transformed.position, 1.0);
     return out;
 }
 
@@ -282,7 +371,49 @@ fragment float4 terrainFragment(
     float distanceToCamera = length(in.worldPosition - uniforms.cameraPosition.xyz);
     float3 color;
 
-    if (uniforms.settings.x > 0.5) {
+    if (uniforms.settings.x > 1.5) {
+        float3 normal = normalize(in.normal);
+        float3 bark = float3(0.095, 0.065, 0.040) * (0.85 + in.uv.y * 0.25);
+        float3 canopy = mix(
+            float3(0.018, 0.075, 0.025),
+            float3(0.045, 0.125, 0.040),
+            in.uv.y);
+        float3 surface = in.uv.x < 0.5 ? bark : canopy;
+
+        float4 lightClip =
+            uniforms.lightViewProjection * float4(in.worldPosition, 1.0);
+        float3 lightNdc = lightClip.xyz / lightClip.w;
+        float2 shadowUv = float2(
+            lightNdc.x * 0.5 + 0.5,
+            0.5 - lightNdc.y * 0.5);
+        float shadowVisibility = 1.0;
+        if (all(shadowUv >= 0.0) && all(shadowUv <= 1.0) &&
+            lightNdc.z >= 0.0 && lightNdc.z <= 1.0) {
+            constexpr sampler shadowSampler(
+                coord::normalized,
+                address::clamp_to_edge,
+                filter::linear,
+                compare_func::less_equal);
+            float texel = uniforms.shadowSettings.x;
+            float depthBias =
+                uniforms.shadowSettings.y * (1.0 + (1.0 - normal.y) * 2.0);
+            float reference = lightNdc.z - depthBias;
+            float visibleSamples = 0.0;
+            for (int y = -1; y <= 1; ++y) {
+                for (int x = -1; x <= 1; ++x) {
+                    visibleSamples += shadowMap.sample_compare(
+                        shadowSampler,
+                        shadowUv + float2(x, y) * texel,
+                        reference);
+                }
+            }
+            shadowVisibility = visibleSamples / 9.0;
+        }
+        float diffuse = saturate(dot(normal, sunDirection));
+        float ambient = 0.20 + 0.18 * saturate(normal.y);
+        color = surface *
+            (ambient + diffuse * mix(0.12, 0.78, shadowVisibility));
+    } else if (uniforms.settings.x > 0.5) {
         float time = uniforms.settings.z;
         float2 flowA = float2(
             in.uv.x * 15.0,

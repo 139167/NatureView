@@ -23,6 +23,7 @@
 #include "nature/core/simulation.hpp"
 #include "nature/render/preview_renderer.hpp"
 #include "nature/render/render_scene.hpp"
+#include "nature/render/vegetation_scene.hpp"
 
 namespace natureview::platform {
 namespace {
@@ -42,6 +43,12 @@ struct alignas(16) FrameUniforms {
     float skySettings[4]{};
     Matrix4 lightViewProjection;
     float shadowSettings[4]{};
+    float windSettings[4]{};
+};
+
+struct alignas(16) GpuTreeInstance {
+    float positionAndHeight[4]{};
+    float parameters[4]{};
 };
 
 struct alignas(16) TonemapUniforms {
@@ -204,6 +211,11 @@ FrameUniforms frameUniforms(
     uniforms.shadowSettings[1] = 0.0015F;
     uniforms.shadowSettings[2] = 1.0F;
     uniforms.shadowSettings[3] = 1.0F;
+    uniforms.windSettings[0] = environment.windDirectionRadians;
+    uniforms.windSettings[1] =
+        clamp(environment.windSpeedMetersPerSecond / 11.0F, 0.0F, 1.0F);
+    uniforms.windSettings[2] = environment.gustFactor;
+    uniforms.windSettings[3] = 0.0F;
     return uniforms;
 }
 
@@ -445,11 +457,29 @@ int runMetalApp(const MetalAppOptions& options) {
             hdrFormat,
             depthFormat,
             terrainVertexDescriptor);
+        id<MTLRenderPipelineState> treePipeline = createPipeline(
+            device,
+            shaderLibrary,
+            @"NatureView instanced trees",
+            @"treeVertex",
+            @"terrainFragment",
+            hdrFormat,
+            depthFormat,
+            terrainVertexDescriptor);
         id<MTLRenderPipelineState> shadowPipeline = createPipeline(
             device,
             shaderLibrary,
             @"NatureView shadow",
             @"shadowVertex",
+            nil,
+            MTLPixelFormatInvalid,
+            depthFormat,
+            terrainVertexDescriptor);
+        id<MTLRenderPipelineState> treeShadowPipeline = createPipeline(
+            device,
+            shaderLibrary,
+            @"NatureView tree shadows",
+            @"treeShadowVertex",
             nil,
             MTLPixelFormatInvalid,
             depthFormat,
@@ -491,6 +521,22 @@ int runMetalApp(const MetalAppOptions& options) {
         }
         const RenderScene scene = buildRenderScene(simulation.world());
         const CombinedMesh mesh = combineMesh(scene);
+        const VegetationScene vegetation =
+            buildVegetationScene(simulation.world());
+        std::vector<GpuTreeInstance> gpuTrees;
+        gpuTrees.reserve(vegetation.instances.size());
+        for (const TreeInstance& tree : vegetation.instances) {
+            GpuTreeInstance gpuTree;
+            gpuTree.positionAndHeight[0] = tree.position.x;
+            gpuTree.positionAndHeight[1] = tree.position.y;
+            gpuTree.positionAndHeight[2] = tree.position.z;
+            gpuTree.positionAndHeight[3] = tree.heightMeters;
+            gpuTree.parameters[0] = tree.yawRadians;
+            gpuTree.parameters[1] = tree.canopyRadiusMeters;
+            gpuTree.parameters[2] = tree.windPhase;
+            gpuTree.parameters[3] = tree.colorVariant;
+            gpuTrees.push_back(gpuTree);
+        }
         id<MTLBuffer> vertexBuffer = [device
             newBufferWithBytes:mesh.vertices.data()
                        length:mesh.vertices.size() * sizeof(RenderVertex)
@@ -499,7 +545,30 @@ int runMetalApp(const MetalAppOptions& options) {
             newBufferWithBytes:mesh.indices.data()
                        length:mesh.indices.size() * sizeof(std::uint32_t)
                       options:MTLResourceStorageModeShared];
-        if (vertexBuffer == nil || indexBuffer == nil) {
+        id<MTLBuffer> treeVertexBuffer = nil;
+        id<MTLBuffer> treeIndexBuffer = nil;
+        id<MTLBuffer> treeInstanceBuffer = nil;
+        if (!vegetation.prototype.vertices.empty() &&
+            !vegetation.prototype.indices.empty() &&
+            !gpuTrees.empty()) {
+            treeVertexBuffer = [device
+                newBufferWithBytes:vegetation.prototype.vertices.data()
+                           length:vegetation.prototype.vertices.size() *
+                                  sizeof(RenderVertex)
+                          options:MTLResourceStorageModeShared];
+            treeIndexBuffer = [device
+                newBufferWithBytes:vegetation.prototype.indices.data()
+                           length:vegetation.prototype.indices.size() *
+                                  sizeof(std::uint32_t)
+                          options:MTLResourceStorageModeShared];
+            treeInstanceBuffer = [device
+                newBufferWithBytes:gpuTrees.data()
+                           length:gpuTrees.size() * sizeof(GpuTreeInstance)
+                          options:MTLResourceStorageModeShared];
+        }
+        if (vertexBuffer == nil || indexBuffer == nil ||
+            treeVertexBuffer == nil || treeIndexBuffer == nil ||
+            treeInstanceBuffer == nil) {
             std::cerr << "Failed to upload render mesh\n";
             return 1;
         }
@@ -663,6 +732,15 @@ int runMetalApp(const MetalAppOptions& options) {
                                        indexBufferOffset:range.indexOffset *
                                                          sizeof(std::uint32_t)];
                 }
+                [shadowEncoder setRenderPipelineState:treeShadowPipeline];
+                [shadowEncoder setVertexBuffer:treeVertexBuffer offset:0 atIndex:0];
+                [shadowEncoder setVertexBuffer:treeInstanceBuffer offset:0 atIndex:2];
+                [shadowEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                          indexCount:vegetation.prototype.indices.size()
+                                           indexType:MTLIndexTypeUInt32
+                                         indexBuffer:treeIndexBuffer
+                                   indexBufferOffset:0
+                                       instanceCount:gpuTrees.size()];
                 [shadowEncoder endEncoding];
 
                 MTLRenderPassDescriptor* pass =
@@ -724,11 +802,38 @@ int runMetalApp(const MetalAppOptions& options) {
                                 indexBufferOffset:range.indexOffset * sizeof(std::uint32_t)];
                 }
 
+                FrameUniforms treeUniforms = frameUniforms(
+                    simulation,
+                    aspectRatio,
+                    2.0F,
+                    simulation.environment().fogDensityPerMeter);
+                [encoder setRenderPipelineState:treePipeline];
+                [encoder setDepthStencilState:terrainDepthState];
+                [encoder setCullMode:MTLCullModeNone];
+                [encoder setVertexBuffer:treeVertexBuffer offset:0 atIndex:0];
+                [encoder setVertexBuffer:treeInstanceBuffer offset:0 atIndex:2];
+                [encoder setVertexBytes:&treeUniforms
+                                 length:sizeof(treeUniforms)
+                                atIndex:1];
+                [encoder setFragmentBytes:&treeUniforms
+                                   length:sizeof(treeUniforms)
+                                  atIndex:1];
+                [encoder setFragmentTexture:shadowTexture atIndex:1];
+                [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                    indexCount:vegetation.prototype.indices.size()
+                                     indexType:MTLIndexTypeUInt32
+                                   indexBuffer:treeIndexBuffer
+                             indexBufferOffset:0
+                                 instanceCount:gpuTrees.size()];
+
                 FrameUniforms riverUniforms = frameUniforms(
                     simulation,
                     aspectRatio,
                     1.0F,
                     simulation.environment().fogDensityPerMeter);
+                [encoder setRenderPipelineState:terrainPipeline];
+                [encoder setCullMode:MTLCullModeNone];
+                [encoder setVertexBuffer:vertexBuffer offset:0 atIndex:0];
                 [encoder setVertexBytes:&riverUniforms
                                  length:sizeof(riverUniforms)
                                 atIndex:1];
@@ -851,7 +956,8 @@ int runMetalApp(const MetalAppOptions& options) {
                   << "simulation_seconds=" << simulation.elapsedSeconds() << '\n'
                   << "terrain_chunks=" << scene.terrainChunks.size() << '\n'
                   << "combined_vertices=" << mesh.vertices.size() << '\n'
-                  << "combined_indices=" << mesh.indices.size() << '\n';
+                  << "combined_indices=" << mesh.indices.size() << '\n'
+                  << "tree_instances=" << gpuTrees.size() << '\n';
         if (captureSucceeded && !options.capturePath.empty()) {
             std::cout << "capture=" << options.capturePath << '\n';
         }
