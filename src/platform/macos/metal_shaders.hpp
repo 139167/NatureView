@@ -28,7 +28,22 @@ struct Uniforms {
 
 struct TonemapUniforms {
     float exposure;
-    float padding[3];
+    float bloomIntensity;
+    float contrast;
+    float saturation;
+    float vignette;
+    float shadowTint;
+    float padding[2];
+};
+
+struct BloomPrefilterUniforms {
+    float threshold;
+    float softKnee;
+    float padding[2];
+};
+
+struct BloomBlurUniforms {
+    float4 parameters;
 };
 
 struct VertexOut {
@@ -347,9 +362,67 @@ float3 acesToneMap(float3 color)
                     (color * (2.43 * color + 0.59) + 0.14));
 }
 
+fragment float4 bloomPrefilterFragment(
+    TonemapOut in [[stage_in]],
+    texture2d<float> hdrColor [[texture(0)]],
+    constant BloomPrefilterUniforms& uniforms [[buffer(0)]])
+{
+    constexpr sampler colorSampler(
+        coord::normalized,
+        address::clamp_to_edge,
+        filter::linear);
+    float2 uv = in.position.xy / float2(hdrColor.get_width(), hdrColor.get_height());
+    float3 color = hdrColor.sample(colorSampler, uv).rgb;
+    float brightness = dot(color, float3(0.2126, 0.7152, 0.0722));
+    float knee = max(uniforms.softKnee, 0.0001);
+    float soft = clamp(
+        brightness - uniforms.threshold + knee,
+        0.0,
+        2.0 * knee);
+    soft = soft * soft / (4.0 * knee);
+    float contribution = max(soft, brightness - uniforms.threshold) /
+                         max(brightness, 0.0001);
+    return float4(color * contribution, 1.0);
+}
+
+fragment float4 bloomBlurFragment(
+    TonemapOut in [[stage_in]],
+    texture2d<float> sourceColor [[texture(0)]],
+    constant BloomBlurUniforms& uniforms [[buffer(0)]])
+{
+    constexpr sampler colorSampler(
+        coord::normalized,
+        address::clamp_to_edge,
+        filter::linear);
+    float2 uv = in.position.xy /
+                float2(sourceColor.get_width(), sourceColor.get_height());
+    float2 texel =
+        float2(1.0 / sourceColor.get_width(), 1.0 / sourceColor.get_height());
+    float2 direction = uniforms.parameters.zw;
+    float3 color = sourceColor.sample(colorSampler, uv).rgb * 0.227027;
+    color += sourceColor.sample(
+        colorSampler, uv + texel * direction).rgb * 0.1945946;
+    color += sourceColor.sample(
+        colorSampler, uv - texel * direction).rgb * 0.1945946;
+    color += sourceColor.sample(
+        colorSampler, uv + texel * direction * 2.0).rgb * 0.1216216;
+    color += sourceColor.sample(
+        colorSampler, uv - texel * direction * 2.0).rgb * 0.1216216;
+    color += sourceColor.sample(
+        colorSampler, uv + texel * direction * 3.0).rgb * 0.054054;
+    color += sourceColor.sample(
+        colorSampler, uv - texel * direction * 3.0).rgb * 0.054054;
+    color += sourceColor.sample(
+        colorSampler, uv + texel * direction * 4.0).rgb * 0.016216;
+    color += sourceColor.sample(
+        colorSampler, uv - texel * direction * 4.0).rgb * 0.016216;
+    return float4(color, 1.0);
+}
+
 fragment float4 tonemapFragment(
     TonemapOut in [[stage_in]],
     texture2d<float> hdrColor [[texture(0)]],
+    texture2d<float> bloomColor [[texture(1)]],
     constant TonemapUniforms& uniforms [[buffer(0)]])
 {
     constexpr sampler colorSampler(
@@ -357,9 +430,24 @@ fragment float4 tonemapFragment(
         address::clamp_to_edge,
         filter::nearest);
     float2 uv = in.position.xy / float2(hdrColor.get_width(), hdrColor.get_height());
-    float3 color = hdrColor.sample(colorSampler, uv).rgb;
+    float3 color =
+        hdrColor.sample(colorSampler, uv).rgb +
+        bloomColor.sample(colorSampler, uv).rgb * uniforms.bloomIntensity;
     color *= exp2(uniforms.exposure);
-    return float4(acesToneMap(color), 1.0);
+    color = acesToneMap(color);
+
+    float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
+    color = mix(float3(luma), color, uniforms.saturation);
+    color = max((color - 0.18) * uniforms.contrast + 0.18, 0.0);
+    float3 cool = float3(0.90, 0.97, 1.08);
+    float3 warm = float3(1.08, 1.01, 0.90);
+    float3 tint = mix(cool, warm, saturate(luma * 1.2));
+    color *= mix(float3(1.0), tint, uniforms.shadowTint);
+
+    float2 centered = uv - 0.5;
+    float vignette = 1.0 -
+        uniforms.vignette * smoothstep(0.18, 0.72, length(centered) * 1.35);
+    return float4(saturate(color * vignette), 1.0);
 }
 
 fragment float4 terrainFragment(
@@ -559,9 +647,17 @@ fragment float4 terrainFragment(
         color += float3(0.85, 0.78, 0.62) * sheen;
     }
 
+    float3 viewDirection =
+        normalize(in.worldPosition - uniforms.cameraPosition.xyz);
+    float sunForward =
+        pow(saturate(dot(viewDirection, sunDirection)), 8.0);
+    float3 fogColor = mix(
+        float3(0.22, 0.29, 0.38),
+        float3(0.55, 0.48, 0.35),
+        sunForward * 0.72);
     float fog = 1.0 - exp(-uniforms.settings.y * distanceToCamera);
     fog += smoothstep(900.0, 4800.0, distanceToCamera) * 0.30;
-    color = mix(color, float3(0.28, 0.35, 0.43), saturate(fog) * 0.80);
+    color = mix(color, fogColor, saturate(fog) * 0.80);
     return float4(max(color, 0.0), 1.0);
 }
 )METAL";

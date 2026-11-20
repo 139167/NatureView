@@ -53,7 +53,22 @@ struct alignas(16) GpuTreeInstance {
 
 struct alignas(16) TonemapUniforms {
     float exposure = 0.0F;
-    float padding[3]{};
+    float bloomIntensity = 0.0F;
+    float contrast = 1.0F;
+    float saturation = 1.0F;
+    float vignette = 0.0F;
+    float shadowTint = 0.0F;
+    float padding[2]{};
+};
+
+struct alignas(16) BloomPrefilterUniforms {
+    float threshold = 0.0F;
+    float softKnee = 0.0F;
+    float padding[2]{};
+};
+
+struct alignas(16) BloomBlurUniforms {
+    float parameters[4]{};
 };
 
 struct DrawRange {
@@ -502,6 +517,24 @@ int runMetalApp(const MetalAppOptions& options) {
             colorFormat,
             MTLPixelFormatInvalid,
             nil);
+        id<MTLRenderPipelineState> bloomPrefilterPipeline = createPipeline(
+            device,
+            shaderLibrary,
+            @"NatureView bloom prefilter",
+            @"tonemapVertex",
+            @"bloomPrefilterFragment",
+            hdrFormat,
+            MTLPixelFormatInvalid,
+            nil);
+        id<MTLRenderPipelineState> bloomBlurPipeline = createPipeline(
+            device,
+            shaderLibrary,
+            @"NatureView bloom blur",
+            @"tonemapVertex",
+            @"bloomBlurFragment",
+            hdrFormat,
+            MTLPixelFormatInvalid,
+            nil);
         id<MTLDepthStencilState> skyDepthState =
             createDepthState(device, false);
         id<MTLDepthStencilState> terrainDepthState =
@@ -621,6 +654,8 @@ int runMetalApp(const MetalAppOptions& options) {
         dispatch_semaphore_t inFlight = dispatch_semaphore_create(2);
         id<MTLTexture> depthTexture = nil;
         id<MTLTexture> hdrTexture = nil;
+        id<MTLTexture> bloomTextureA = nil;
+        id<MTLTexture> bloomTextureB = nil;
         id<MTLCommandBuffer> lastCommandBuffer = nil;
         id<MTLBuffer> captureBuffer = nil;
         NSUInteger capturedBytesPerRow = 0;
@@ -685,6 +720,14 @@ int runMetalApp(const MetalAppOptions& options) {
                     hdrTexture.height != drawableHeight) {
                     hdrTexture =
                         createHdrTexture(device, drawableWidth, drawableHeight);
+                    const NSUInteger bloomWidth =
+                        std::max<NSUInteger>(1, drawableWidth / 2);
+                    const NSUInteger bloomHeight =
+                        std::max<NSUInteger>(1, drawableHeight / 2);
+                    bloomTextureA =
+                        createHdrTexture(device, bloomWidth, bloomHeight);
+                    bloomTextureB =
+                        createHdrTexture(device, bloomWidth, bloomHeight);
                 }
 
                 const float aspectRatio =
@@ -848,6 +891,76 @@ int runMetalApp(const MetalAppOptions& options) {
                                                sizeof(std::uint32_t)];
                 [encoder endEncoding];
 
+                const MTLViewport bloomViewport{
+                    0.0,
+                    0.0,
+                    static_cast<double>(bloomTextureA.width),
+                    static_cast<double>(bloomTextureA.height),
+                    0.0,
+                    1.0,
+                };
+
+                MTLRenderPassDescriptor* prefilterPass =
+                    [MTLRenderPassDescriptor renderPassDescriptor];
+                prefilterPass.colorAttachments[0].texture = bloomTextureA;
+                prefilterPass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+                prefilterPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+                id<MTLRenderCommandEncoder> prefilterEncoder =
+                    [commandBuffer renderCommandEncoderWithDescriptor:prefilterPass];
+                [prefilterEncoder setViewport:bloomViewport];
+                [prefilterEncoder setRenderPipelineState:bloomPrefilterPipeline];
+                [prefilterEncoder setFragmentTexture:hdrTexture atIndex:0];
+                BloomPrefilterUniforms prefilterUniforms;
+                prefilterUniforms.threshold = 0.85F;
+                prefilterUniforms.softKnee = 0.40F;
+                [prefilterEncoder setFragmentBytes:&prefilterUniforms
+                                            length:sizeof(prefilterUniforms)
+                                           atIndex:0];
+                [prefilterEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                     vertexStart:0
+                                     vertexCount:3];
+                [prefilterEncoder endEncoding];
+
+                MTLRenderPassDescriptor* horizontalPass =
+                    [MTLRenderPassDescriptor renderPassDescriptor];
+                horizontalPass.colorAttachments[0].texture = bloomTextureB;
+                horizontalPass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+                horizontalPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+                id<MTLRenderCommandEncoder> horizontalEncoder =
+                    [commandBuffer renderCommandEncoderWithDescriptor:horizontalPass];
+                [horizontalEncoder setViewport:bloomViewport];
+                [horizontalEncoder setRenderPipelineState:bloomBlurPipeline];
+                [horizontalEncoder setFragmentTexture:bloomTextureA atIndex:0];
+                BloomBlurUniforms horizontalUniforms;
+                horizontalUniforms.parameters[2] = 1.0F;
+                [horizontalEncoder setFragmentBytes:&horizontalUniforms
+                                             length:sizeof(horizontalUniforms)
+                                            atIndex:0];
+                [horizontalEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                      vertexStart:0
+                                      vertexCount:3];
+                [horizontalEncoder endEncoding];
+
+                MTLRenderPassDescriptor* verticalPass =
+                    [MTLRenderPassDescriptor renderPassDescriptor];
+                verticalPass.colorAttachments[0].texture = bloomTextureA;
+                verticalPass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+                verticalPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+                id<MTLRenderCommandEncoder> verticalEncoder =
+                    [commandBuffer renderCommandEncoderWithDescriptor:verticalPass];
+                [verticalEncoder setViewport:bloomViewport];
+                [verticalEncoder setRenderPipelineState:bloomBlurPipeline];
+                [verticalEncoder setFragmentTexture:bloomTextureB atIndex:0];
+                BloomBlurUniforms verticalUniforms;
+                verticalUniforms.parameters[3] = 1.0F;
+                [verticalEncoder setFragmentBytes:&verticalUniforms
+                                           length:sizeof(verticalUniforms)
+                                          atIndex:0];
+                [verticalEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                     vertexStart:0
+                                     vertexCount:3];
+                [verticalEncoder endEncoding];
+
                 MTLRenderPassDescriptor* compositePass =
                     [MTLRenderPassDescriptor renderPassDescriptor];
                 compositePass.colorAttachments[0].texture = drawable.texture;
@@ -859,6 +972,7 @@ int runMetalApp(const MetalAppOptions& options) {
                 [compositeEncoder setViewport:viewport];
                 [compositeEncoder setRenderPipelineState:tonemapPipeline];
                 [compositeEncoder setFragmentTexture:hdrTexture atIndex:0];
+                [compositeEncoder setFragmentTexture:bloomTextureA atIndex:1];
                 const float exposure =
                     -0.15F +
                     (1.0F - simulation.environment().cloudCover) * 0.08F +
@@ -874,6 +988,11 @@ int runMetalApp(const MetalAppOptions& options) {
                         0.55F;
                 TonemapUniforms tonemapUniforms;
                 tonemapUniforms.exposure = exposure;
+                tonemapUniforms.bloomIntensity = 0.42F;
+                tonemapUniforms.contrast = 1.06F;
+                tonemapUniforms.saturation = 1.08F;
+                tonemapUniforms.vignette = 0.16F;
+                tonemapUniforms.shadowTint = 0.22F;
                 [compositeEncoder setFragmentBytes:&tonemapUniforms
                                             length:sizeof(tonemapUniforms)
                                            atIndex:0];
