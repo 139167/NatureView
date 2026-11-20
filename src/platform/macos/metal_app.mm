@@ -58,7 +58,8 @@ struct alignas(16) TonemapUniforms {
     float saturation = 1.0F;
     float vignette = 0.0F;
     float shadowTint = 0.0F;
-    float padding[2]{};
+    float ambientOcclusion = 0.0F;
+    float padding = 0.0F;
 };
 
 struct alignas(16) BloomPrefilterUniforms {
@@ -69,6 +70,15 @@ struct alignas(16) BloomPrefilterUniforms {
 
 struct alignas(16) BloomBlurUniforms {
     float parameters[4]{};
+};
+
+struct alignas(16) SsaoUniforms {
+    float cameraPosition[4]{};
+    float cameraRight[4]{};
+    float cameraUp[4]{};
+    float cameraForward[4]{};
+    float parameters[4]{};
+    float settings[4]{};
 };
 
 struct DrawRange {
@@ -234,6 +244,43 @@ FrameUniforms frameUniforms(
     return uniforms;
 }
 
+SsaoUniforms ssaoUniforms(
+    const NatureSimulation& simulation,
+    float aspectRatio) {
+    const CameraState& camera = simulation.camera();
+    const Vec3 right =
+        normalize(cross({0.0F, 1.0F, 0.0F}, camera.forward));
+    const Vec3 up = cross(camera.forward, right);
+    constexpr float nearPlane = 0.1F;
+    constexpr float farPlane = 8000.0F;
+
+    SsaoUniforms uniforms;
+    uniforms.cameraPosition[0] = camera.position.x;
+    uniforms.cameraPosition[1] = camera.position.y;
+    uniforms.cameraPosition[2] = camera.position.z;
+    uniforms.cameraPosition[3] = 1.0F;
+    uniforms.cameraRight[0] = right.x;
+    uniforms.cameraRight[1] = right.y;
+    uniforms.cameraRight[2] = right.z;
+    uniforms.cameraUp[0] = up.x;
+    uniforms.cameraUp[1] = up.y;
+    uniforms.cameraUp[2] = up.z;
+    uniforms.cameraForward[0] = camera.forward.x;
+    uniforms.cameraForward[1] = camera.forward.y;
+    uniforms.cameraForward[2] = camera.forward.z;
+    uniforms.cameraForward[3] = 0.0F;
+    uniforms.parameters[0] = nearPlane;
+    uniforms.parameters[1] = farPlane;
+    uniforms.parameters[2] =
+        std::tan(camera.verticalFovDegrees * 0.5F * kPi / 180.0F);
+    uniforms.parameters[3] = aspectRatio;
+    uniforms.settings[0] = 7.0F;
+    uniforms.settings[1] = 3.0F;
+    uniforms.settings[2] = 0.006F;
+    uniforms.settings[3] = 2.2F;
+    return uniforms;
+}
+
 CombinedMesh combineMesh(const RenderScene& scene) {
     CombinedMesh combined;
     std::size_t vertexCount = scene.river.vertices.size();
@@ -393,7 +440,22 @@ id<MTLTexture> createDepthTexture(
                                      width:width
                                     height:height
                                  mipmapped:NO];
-    descriptor.usage = MTLTextureUsageRenderTarget;
+    descriptor.usage =
+        MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    descriptor.storageMode = MTLStorageModePrivate;
+    return [device newTextureWithDescriptor:descriptor];
+}
+
+id<MTLTexture> createSsaoTexture(
+    id<MTLDevice> device,
+    NSUInteger width,
+    NSUInteger height) {
+    MTLTextureDescriptor* descriptor = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatR8Unorm
+                                     width:width
+                                    height:height
+                                 mipmapped:NO];
+    descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
     descriptor.storageMode = MTLStorageModePrivate;
     return [device newTextureWithDescriptor:descriptor];
 }
@@ -535,6 +597,15 @@ int runMetalApp(const MetalAppOptions& options) {
             hdrFormat,
             MTLPixelFormatInvalid,
             nil);
+        id<MTLRenderPipelineState> ssaoPipeline = createPipeline(
+            device,
+            shaderLibrary,
+            @"NatureView SSAO",
+            @"tonemapVertex",
+            @"ssaoFragment",
+            MTLPixelFormatR8Unorm,
+            MTLPixelFormatInvalid,
+            nil);
         id<MTLDepthStencilState> skyDepthState =
             createDepthState(device, false);
         id<MTLDepthStencilState> terrainDepthState =
@@ -654,6 +725,7 @@ int runMetalApp(const MetalAppOptions& options) {
         dispatch_semaphore_t inFlight = dispatch_semaphore_create(2);
         id<MTLTexture> depthTexture = nil;
         id<MTLTexture> hdrTexture = nil;
+        id<MTLTexture> ssaoTexture = nil;
         id<MTLTexture> bloomTextureA = nil;
         id<MTLTexture> bloomTextureB = nil;
         id<MTLCommandBuffer> lastCommandBuffer = nil;
@@ -728,6 +800,8 @@ int runMetalApp(const MetalAppOptions& options) {
                         createHdrTexture(device, bloomWidth, bloomHeight);
                     bloomTextureB =
                         createHdrTexture(device, bloomWidth, bloomHeight);
+                    ssaoTexture =
+                        createSsaoTexture(device, bloomWidth, bloomHeight);
                 }
 
                 const float aspectRatio =
@@ -795,7 +869,7 @@ int runMetalApp(const MetalAppOptions& options) {
                 colorAttachment.storeAction = MTLStoreActionStore;
                 pass.depthAttachment.texture = depthTexture;
                 pass.depthAttachment.loadAction = MTLLoadActionClear;
-                pass.depthAttachment.storeAction = MTLStoreActionDontCare;
+                pass.depthAttachment.storeAction = MTLStoreActionStore;
                 pass.depthAttachment.clearDepth = 1.0;
 
                 id<MTLRenderCommandEncoder> encoder =
@@ -900,6 +974,26 @@ int runMetalApp(const MetalAppOptions& options) {
                     1.0,
                 };
 
+                MTLRenderPassDescriptor* ssaoPass =
+                    [MTLRenderPassDescriptor renderPassDescriptor];
+                ssaoPass.colorAttachments[0].texture = ssaoTexture;
+                ssaoPass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+                ssaoPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+                id<MTLRenderCommandEncoder> ssaoEncoder =
+                    [commandBuffer renderCommandEncoderWithDescriptor:ssaoPass];
+                [ssaoEncoder setViewport:bloomViewport];
+                [ssaoEncoder setRenderPipelineState:ssaoPipeline];
+                [ssaoEncoder setFragmentTexture:depthTexture atIndex:0];
+                SsaoUniforms aoUniforms =
+                    ssaoUniforms(simulation, aspectRatio);
+                [ssaoEncoder setFragmentBytes:&aoUniforms
+                                       length:sizeof(aoUniforms)
+                                      atIndex:0];
+                [ssaoEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+                                vertexStart:0
+                                vertexCount:3];
+                [ssaoEncoder endEncoding];
+
                 MTLRenderPassDescriptor* prefilterPass =
                     [MTLRenderPassDescriptor renderPassDescriptor];
                 prefilterPass.colorAttachments[0].texture = bloomTextureA;
@@ -973,6 +1067,7 @@ int runMetalApp(const MetalAppOptions& options) {
                 [compositeEncoder setRenderPipelineState:tonemapPipeline];
                 [compositeEncoder setFragmentTexture:hdrTexture atIndex:0];
                 [compositeEncoder setFragmentTexture:bloomTextureA atIndex:1];
+                [compositeEncoder setFragmentTexture:ssaoTexture atIndex:2];
                 const float exposure =
                     -0.15F +
                     (1.0F - simulation.environment().cloudCover) * 0.08F +
@@ -993,6 +1088,7 @@ int runMetalApp(const MetalAppOptions& options) {
                 tonemapUniforms.saturation = 1.08F;
                 tonemapUniforms.vignette = 0.16F;
                 tonemapUniforms.shadowTint = 0.22F;
+                tonemapUniforms.ambientOcclusion = 0.55F;
                 [compositeEncoder setFragmentBytes:&tonemapUniforms
                                             length:sizeof(tonemapUniforms)
                                            atIndex:0];

@@ -33,7 +33,8 @@ struct TonemapUniforms {
     float saturation;
     float vignette;
     float shadowTint;
-    float padding[2];
+    float ambientOcclusion;
+    float padding;
 };
 
 struct BloomPrefilterUniforms {
@@ -44,6 +45,15 @@ struct BloomPrefilterUniforms {
 
 struct BloomBlurUniforms {
     float4 parameters;
+};
+
+struct SsaoUniforms {
+    float4 cameraPosition;
+    float4 cameraRight;
+    float4 cameraUp;
+    float4 cameraForward;
+    float4 parameters;
+    float4 settings;
 };
 
 struct VertexOut {
@@ -419,10 +429,112 @@ fragment float4 bloomBlurFragment(
     return float4(color, 1.0);
 }
 
+float3 reconstructWorldPosition(
+    float2 uv,
+    float depth,
+    constant SsaoUniforms& uniforms)
+{
+    float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    float tangent = uniforms.parameters.z;
+    float aspect = uniforms.parameters.w;
+    float3 ray = normalize(
+        uniforms.cameraForward.xyz +
+        uniforms.cameraRight.xyz * ndc.x * tangent * aspect +
+        uniforms.cameraUp.xyz * ndc.y * tangent);
+    float nearPlane = uniforms.parameters.x;
+    float farPlane = uniforms.parameters.y;
+    float viewZ =
+        -(nearPlane * farPlane) /
+        (farPlane + depth * (nearPlane - farPlane));
+    float forwardAmount = max(dot(ray, uniforms.cameraForward.xyz), 0.05);
+    return uniforms.cameraPosition.xyz + ray * (-viewZ / forwardAmount);
+}
+
+fragment float4 ssaoFragment(
+    TonemapOut in [[stage_in]],
+    depth2d<float> sceneDepth [[texture(0)]],
+    constant SsaoUniforms& uniforms [[buffer(0)]])
+{
+    constexpr sampler depthSampler(
+        coord::normalized,
+        address::clamp_to_edge,
+        filter::nearest);
+    float2 size = float2(sceneDepth.get_width(), sceneDepth.get_height());
+    float2 uv = in.position.xy / size;
+    float centerDepth = sceneDepth.sample(depthSampler, uv);
+    if (centerDepth >= 0.9999) {
+        return float4(1.0);
+    }
+
+    float2 texel = 1.0 / size;
+    float leftDepth =
+        sceneDepth.sample(depthSampler, uv - float2(texel.x, 0.0));
+    float rightDepth =
+        sceneDepth.sample(depthSampler, uv + float2(texel.x, 0.0));
+    float upDepth =
+        sceneDepth.sample(depthSampler, uv - float2(0.0, texel.y));
+    float downDepth =
+        sceneDepth.sample(depthSampler, uv + float2(0.0, texel.y));
+    if (leftDepth >= 0.9999 || rightDepth >= 0.9999 ||
+        upDepth >= 0.9999 || downDepth >= 0.9999) {
+        return float4(1.0);
+    }
+
+    float3 center =
+        reconstructWorldPosition(uv, centerDepth, uniforms);
+    float3 left =
+        reconstructWorldPosition(uv - float2(texel.x, 0.0), leftDepth, uniforms);
+    float3 right =
+        reconstructWorldPosition(uv + float2(texel.x, 0.0), rightDepth, uniforms);
+    float3 up =
+        reconstructWorldPosition(uv - float2(0.0, texel.y), upDepth, uniforms);
+    float3 down =
+        reconstructWorldPosition(uv + float2(0.0, texel.y), downDepth, uniforms);
+    float3 normal = normalize(cross(right - left, down - up));
+    if (dot(normal, uniforms.cameraPosition.xyz - center) < 0.0) {
+        normal = -normal;
+    }
+
+    float2 directions[8] = {
+        float2(1.0, 0.0),
+        float2(-1.0, 0.0),
+        float2(0.0, 1.0),
+        float2(0.0, -1.0),
+        float2(0.707, 0.707),
+        float2(-0.707, 0.707),
+        float2(0.707, -0.707),
+        float2(-0.707, -0.707),
+    };
+    float2 radiusUv = uniforms.settings.x * texel;
+    float radiusWorld = uniforms.settings.y;
+    float occlusion = 0.0;
+    for (int sampleIndex = 0; sampleIndex < 8; ++sampleIndex) {
+        float2 sampleUv = uv + directions[sampleIndex] * radiusUv;
+        float sampleDepth = sceneDepth.sample(depthSampler, sampleUv);
+        if (sampleDepth >= 0.9999 ||
+            abs(sampleDepth - centerDepth) > uniforms.settings.z) {
+            continue;
+        }
+        float3 samplePosition =
+            reconstructWorldPosition(sampleUv, sampleDepth, uniforms);
+        float3 difference = samplePosition - center;
+        float distanceToSample = length(difference);
+        if (distanceToSample > 0.08 && distanceToSample < radiusWorld) {
+            float hemisphere = saturate(
+                dot(normal, difference / distanceToSample) - 0.05);
+            occlusion += hemisphere *
+                         (1.0 - distanceToSample / radiusWorld);
+        }
+    }
+    float visibility = 1.0 - saturate(occlusion * uniforms.settings.w);
+    return float4(float3(visibility), 1.0);
+}
+
 fragment float4 tonemapFragment(
     TonemapOut in [[stage_in]],
     texture2d<float> hdrColor [[texture(0)]],
     texture2d<float> bloomColor [[texture(1)]],
+    texture2d<float> ambientOcclusionTexture [[texture(2)]],
     constant TonemapUniforms& uniforms [[buffer(0)]])
 {
     constexpr sampler colorSampler(
@@ -443,6 +555,8 @@ fragment float4 tonemapFragment(
     float3 warm = float3(1.08, 1.01, 0.90);
     float3 tint = mix(cool, warm, saturate(luma * 1.2));
     color *= mix(float3(1.0), tint, uniforms.shadowTint);
+    float ambientOcclusion = ambientOcclusionTexture.sample(colorSampler, uv).r;
+    color *= mix(1.0, ambientOcclusion, uniforms.ambientOcclusion);
 
     float2 centered = uv - 0.5;
     float vignette = 1.0 -
@@ -487,15 +601,15 @@ fragment float4 terrainFragment(
                 uniforms.shadowSettings.y * (1.0 + (1.0 - normal.y) * 2.0);
             float reference = lightNdc.z - depthBias;
             float visibleSamples = 0.0;
-            for (int y = -1; y <= 1; ++y) {
-                for (int x = -1; x <= 1; ++x) {
+            for (int y = -2; y <= 2; ++y) {
+                for (int x = -2; x <= 2; ++x) {
                     visibleSamples += shadowMap.sample_compare(
                         shadowSampler,
                         shadowUv + float2(x, y) * texel,
                         reference);
                 }
             }
-            shadowVisibility = visibleSamples / 9.0;
+            shadowVisibility = visibleSamples / 25.0;
         }
         float diffuse = saturate(dot(normal, sunDirection));
         float ambient = 0.20 + 0.18 * saturate(normal.y);
@@ -630,8 +744,8 @@ fragment float4 terrainFragment(
                 uniforms.shadowSettings.y * (1.0 + (1.0 - normal.y) * 2.0);
             float reference = lightNdc.z - depthBias;
             float visibleSamples = 0.0;
-            for (int y = -1; y <= 1; ++y) {
-                for (int x = -1; x <= 1; ++x) {
+            for (int y = -2; y <= 2; ++y) {
+                for (int x = -2; x <= 2; ++x) {
                     float2 offset = float2(x, y) * texel;
                     visibleSamples += shadowMap.sample_compare(
                         shadowSampler,
@@ -639,7 +753,7 @@ fragment float4 terrainFragment(
                         reference);
                 }
             }
-            shadowVisibility = visibleSamples / 9.0;
+            shadowVisibility = visibleSamples / 25.0;
         }
         float directVisibility = mix(0.16, 1.0, shadowVisibility);
         color *= skyLight + diffuse * 0.72 * directVisibility;
