@@ -53,11 +53,34 @@ else()
     endif()
 endif()
 
+add_library(nature_audio
+    src/audio/soundscape.cpp
+)
+
+target_compile_features(nature_audio PUBLIC cxx_std_20)
+target_include_directories(nature_audio PUBLIC include)
+target_link_libraries(nature_audio PUBLIC nature_core)
+
+if(MSVC)
+    target_compile_options(nature_audio PRIVATE /W4 /fp:strict)
+    if(NATUREVIEW_WARNINGS_AS_ERRORS)
+        target_compile_options(nature_audio PRIVATE /WX)
+    endif()
+else()
+    target_compile_options(nature_audio PRIVATE -Wall -Wextra -Wpedantic -ffp-contract=off)
+    if(NATUREVIEW_WARNINGS_AS_ERRORS)
+        target_compile_options(nature_audio PRIVATE -Werror)
+    endif()
+endif()
+
 add_executable(naturecore_sim tools/naturecore_sim.cpp)
 target_link_libraries(naturecore_sim PRIVATE nature_core)
 
 add_executable(nature_preview_cli tools/nature_preview.cpp)
 target_link_libraries(nature_preview_cli PRIVATE nature_preview)
+
+add_executable(soundscape_render tools/soundscape_render.cpp)
+target_link_libraries(soundscape_render PRIVATE nature_audio)
 
 if(WIN32)
     add_library(nature_dx12
@@ -119,6 +142,10 @@ if(BUILD_TESTING)
     add_executable(render_scene_tests tests/render_scene_tests.cpp)
     target_link_libraries(render_scene_tests PRIVATE nature_preview)
     add_test(NAME render_scene_tests COMMAND render_scene_tests)
+
+    add_executable(audio_tests tests/audio_tests.cpp)
+    target_link_libraries(audio_tests PRIVATE nature_audio)
+    add_test(NAME audio_tests COMMAND audio_tests)
 
     if(WIN32)
         add_test(NAME dx12_probe COMMAND natureview_dx12_probe)

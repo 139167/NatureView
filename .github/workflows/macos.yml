@@ -22,12 +22,18 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+      - name: Render soundscape
+        run: |
+          ./build/soundscape_render --seed 139167 --seconds 60 \
+            --duration 5 --output build/nature-soundscape.wav
+
       - name: Upload Metal capture
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: metal-frames
+          name: natureview-media
           path: |
             build/metal-scene.ppm
             build/metal-night.ppm
+            build/nature-soundscape.wav
           if-no-files-found: warn
