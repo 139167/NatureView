@@ -126,6 +126,29 @@ if(APPLE)
         "-framework Metal"
         "-framework QuartzCore"
     )
+
+    add_executable(natureview_audio_demo
+        src/platform/macos/audio_engine.mm
+        tools/macos/audio_live_demo.cpp
+    )
+
+    target_compile_features(natureview_audio_demo PRIVATE cxx_std_20)
+    target_include_directories(natureview_audio_demo PRIVATE src/platform/macos)
+    target_compile_options(natureview_audio_demo PRIVATE
+        -fobjc-arc
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    if(NATUREVIEW_WARNINGS_AS_ERRORS)
+        target_compile_options(natureview_audio_demo PRIVATE -Werror)
+    endif()
+    target_link_libraries(natureview_audio_demo PRIVATE
+        nature_audio
+        "-framework Foundation"
+        "-framework AVFoundation"
+        "-framework AudioToolbox"
+    )
 endif()
 
 include(CTest)

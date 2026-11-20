@@ -70,6 +70,107 @@ SoundscapeParameters SoundscapeDirector::evaluate(
     return parameters;
 }
 
+SoundscapeSynthesizer::SoundscapeSynthesizer(
+    std::uint64_t seed,
+    std::uint32_t sampleRate) {
+    sampleRate_ = static_cast<float>(std::clamp(sampleRate, 8000U, 192000U));
+    sampleSeconds_ = 1.0F / sampleRate_;
+    parameterSmoothing_ =
+        1.0F - std::exp(-1.0F / (0.18F * sampleRate_));
+    leftNoiseState_ =
+        static_cast<std::uint32_t>(seed ^ 0x9e3779b9ULL);
+    rightNoiseState_ =
+        static_cast<std::uint32_t>((seed >> 32U) ^ 0x85ebca6bULL);
+    if (leftNoiseState_ == 0) {
+        leftNoiseState_ = 1;
+    }
+    if (rightNoiseState_ == 0) {
+        rightNoiseState_ = 1;
+    }
+}
+
+void SoundscapeSynthesizer::setParameters(
+    const SoundscapeParameters& parameters) {
+    target_ = parameters;
+    if (!parametersInitialized_) {
+        current_ = target_;
+        parametersInitialized_ = true;
+    }
+}
+
+void SoundscapeSynthesizer::nextSample(float& left, float& right) {
+    current_.windGain +=
+        (target_.windGain - current_.windGain) * parameterSmoothing_;
+    current_.windTurbulence +=
+        (target_.windTurbulence - current_.windTurbulence) * parameterSmoothing_;
+    current_.foliageGain +=
+        (target_.foliageGain - current_.foliageGain) * parameterSmoothing_;
+    current_.waterGain +=
+        (target_.waterGain - current_.waterGain) * parameterSmoothing_;
+    current_.waterFlow +=
+        (target_.waterFlow - current_.waterFlow) * parameterSmoothing_;
+    current_.waterPan +=
+        (target_.waterPan - current_.waterPan) * parameterSmoothing_;
+    current_.rainGain +=
+        (target_.rainGain - current_.rainGain) * parameterSmoothing_;
+
+    const float leftNoise = signedNoise(leftNoiseState_);
+    const float rightNoise = signedNoise(rightNoiseState_);
+    const float windCoefficient =
+        0.0012F + current_.windTurbulence * 0.003F;
+    const float waterFastCoefficient =
+        0.035F + current_.waterFlow * 0.06F;
+    const float waterSlowCoefficient =
+        0.006F + current_.waterFlow * 0.012F;
+
+    leftWindLow_ += (leftNoise - leftWindLow_) * windCoefficient;
+    rightWindLow_ += (rightNoise - rightWindLow_) * windCoefficient;
+    leftWaterFast_ +=
+        (leftNoise - leftWaterFast_) * waterFastCoefficient;
+    rightWaterFast_ +=
+        (rightNoise - rightWaterFast_) * waterFastCoefficient;
+    leftWaterSlow_ +=
+        (leftWaterFast_ - leftWaterSlow_) * waterSlowCoefficient;
+    rightWaterSlow_ +=
+        (rightWaterFast_ - rightWaterSlow_) * waterSlowCoefficient;
+
+    const float gust =
+        0.62F +
+        0.38F * std::sin(
+                    elapsedSeconds_ *
+                    (0.23F + current_.windTurbulence * 0.31F) *
+                    std::numbers::pi_v<float> * 2.0F);
+    const float panAngle =
+        (current_.waterPan + 1.0F) * 0.25F * std::numbers::pi_v<float>;
+    const float waterLeft = std::cos(panAngle);
+    const float waterRight = std::sin(panAngle);
+    const float waterLeftSignal =
+        (leftWaterFast_ - leftWaterSlow_ * 0.72F) * 2.0F;
+    const float waterRightSignal =
+        (rightWaterFast_ - rightWaterSlow_ * 0.72F) * 2.0F;
+    const float rainLeft =
+        (leftNoise - leftRainPrevious_ * 0.88F) * 1.7F;
+    const float rainRight =
+        (rightNoise - rightRainPrevious_ * 0.88F) * 1.7F;
+    leftRainPrevious_ = leftNoise;
+    rightRainPrevious_ = rightNoise;
+
+    const float mixLeft =
+        leftWindLow_ * 2.4F * gust * current_.windGain * 0.34F +
+        waterLeftSignal * current_.waterGain * 0.62F * waterLeft +
+        rainLeft * current_.rainGain * 0.42F +
+        (leftNoise - leftWindLow_) * 0.35F * current_.foliageGain * 0.25F;
+    const float mixRight =
+        rightWindLow_ * 2.4F * gust * current_.windGain * 0.34F +
+        waterRightSignal * current_.waterGain * 0.62F * waterRight +
+        rainRight * current_.rainGain * 0.42F +
+        (rightNoise - rightWindLow_) * 0.35F * current_.foliageGain * 0.25F;
+
+    left = std::tanh(mixLeft * 0.90F);
+    right = std::tanh(mixRight * 0.90F);
+    elapsedSeconds_ += sampleSeconds_;
+}
+
 std::vector<float> OfflineSoundscapeRenderer::render(
     const SoundscapeParameters& parameters,
     SoundscapeRenderSettings settings) const {
@@ -80,91 +181,22 @@ std::vector<float> OfflineSoundscapeRenderer::render(
         std::llround(settings.durationSeconds * settings.sampleRate));
     std::vector<float> output(frameCount * kChannelCount);
 
-    std::uint32_t leftState =
-        static_cast<std::uint32_t>(settings.seed ^ 0x9e3779b9ULL);
-    std::uint32_t rightState =
-        static_cast<std::uint32_t>((settings.seed >> 32U) ^ 0x85ebca6bULL);
-    if (leftState == 0) {
-        leftState = 1;
-    }
-    if (rightState == 0) {
-        rightState = 1;
-    }
-
-    float leftWindLow = 0.0F;
-    float rightWindLow = 0.0F;
-    float leftWaterFast = 0.0F;
-    float rightWaterFast = 0.0F;
-    float leftWaterSlow = 0.0F;
-    float rightWaterSlow = 0.0F;
-    float leftRainPrevious = 0.0F;
-    float rightRainPrevious = 0.0F;
-
-    const float panAngle = (parameters.waterPan + 1.0F) * 0.25F * std::numbers::pi_v<float>;
-    const float waterLeft = std::cos(panAngle);
-    const float waterRight = std::sin(panAngle);
-    const float secondsPerFrame = 1.0F / static_cast<float>(settings.sampleRate);
-    const float windCoefficient = 0.0012F + parameters.windTurbulence * 0.003F;
-    const float waterFastCoefficient = 0.035F + parameters.waterFlow * 0.06F;
-    const float waterSlowCoefficient = 0.006F + parameters.waterFlow * 0.012F;
+    SoundscapeSynthesizer synthesizer(settings.seed, settings.sampleRate);
+    synthesizer.setParameters(parameters);
     const float fadeFrames = std::max(1.0F, 0.012F * settings.sampleRate);
 
     for (std::size_t frame = 0; frame < frameCount; ++frame) {
-        const float seconds = static_cast<float>(frame) * secondsPerFrame;
-        const float leftNoise = signedNoise(leftState);
-        const float rightNoise = signedNoise(rightState);
-
-        leftWindLow += (leftNoise - leftWindLow) * windCoefficient;
-        rightWindLow += (rightNoise - rightWindLow) * windCoefficient;
-        leftWaterFast +=
-            (leftNoise - leftWaterFast) * waterFastCoefficient;
-        rightWaterFast +=
-            (rightNoise - rightWaterFast) * waterFastCoefficient;
-        leftWaterSlow +=
-            (leftWaterFast - leftWaterSlow) * waterSlowCoefficient;
-        rightWaterSlow +=
-            (rightWaterFast - rightWaterSlow) * waterSlowCoefficient;
-
-        const float gust =
-            0.62F +
-            0.38F * std::sin(
-                        seconds * (0.23F + parameters.windTurbulence * 0.31F) *
-                            std::numbers::pi_v<float> * 2.0F);
-        const float windLeft = leftWindLow * 2.4F * gust;
-        const float windRight = rightWindLow * 2.4F * gust;
-        const float waterLeftSignal =
-            (leftWaterFast - leftWaterSlow * 0.72F) * 2.0F;
-        const float waterRightSignal =
-            (rightWaterFast - rightWaterSlow * 0.72F) * 2.0F;
-        const float rainLeft =
-            (leftNoise - leftRainPrevious * 0.88F) * 1.7F;
-        const float rainRight =
-            (rightNoise - rightRainPrevious * 0.88F) * 1.7F;
-        leftRainPrevious = leftNoise;
-        rightRainPrevious = rightNoise;
-        const float foliageLeft =
-            (leftNoise - leftWindLow) * 0.35F * parameters.foliageGain;
-        const float foliageRight =
-            (rightNoise - rightWindLow) * 0.35F * parameters.foliageGain;
-
-        float mixLeft =
-            windLeft * parameters.windGain * 0.34F +
-            waterLeftSignal * parameters.waterGain * 0.62F * waterLeft +
-            rainLeft * parameters.rainGain * 0.42F +
-            foliageLeft * 0.25F;
-        float mixRight =
-            windRight * parameters.windGain * 0.34F +
-            waterRightSignal * parameters.waterGain * 0.62F * waterRight +
-            rainRight * parameters.rainGain * 0.42F +
-            foliageRight * 0.25F;
+        float left = 0.0F;
+        float right = 0.0F;
+        synthesizer.nextSample(left, right);
 
         const float fade = std::min(
             1.0F,
             std::min(
                 static_cast<float>(frame) / fadeFrames,
                 static_cast<float>(frameCount - frame - 1) / fadeFrames));
-        output[frame * 2] = std::tanh(mixLeft * 0.90F) * fade;
-        output[frame * 2 + 1] = std::tanh(mixRight * 0.90F) * fade;
+        output[frame * 2] = left * fade;
+        output[frame * 2 + 1] = right * fade;
     }
     return output;
 }

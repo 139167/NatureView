@@ -28,6 +28,33 @@ public:
         const WorldDefinition& world) const;
 };
 
+class SoundscapeSynthesizer {
+public:
+    SoundscapeSynthesizer(std::uint64_t seed, std::uint32_t sampleRate);
+
+    void setParameters(const SoundscapeParameters& parameters);
+    void nextSample(float& left, float& right);
+
+private:
+    std::uint32_t leftNoiseState_ = 0;
+    std::uint32_t rightNoiseState_ = 0;
+    float leftWindLow_ = 0.0F;
+    float rightWindLow_ = 0.0F;
+    float leftWaterFast_ = 0.0F;
+    float rightWaterFast_ = 0.0F;
+    float leftWaterSlow_ = 0.0F;
+    float rightWaterSlow_ = 0.0F;
+    float leftRainPrevious_ = 0.0F;
+    float rightRainPrevious_ = 0.0F;
+    float sampleRate_ = 48000.0F;
+    float sampleSeconds_ = 0.0F;
+    float elapsedSeconds_ = 0.0F;
+    float parameterSmoothing_ = 0.0F;
+    bool parametersInitialized_ = false;
+    SoundscapeParameters current_;
+    SoundscapeParameters target_;
+};
+
 struct SoundscapeRenderSettings {
     std::uint32_t sampleRate = 48000;
     double durationSeconds = 1.0;
