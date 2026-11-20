@@ -5,6 +5,7 @@
 #include <numbers>
 
 #include "nature/core/math.hpp"
+#include "nature/core/noise.hpp"
 
 namespace natureview {
 namespace {
@@ -135,6 +136,32 @@ void appendCanopyCluster(
     }
 }
 
+void appendBranch(
+    RenderMesh& mesh,
+    const Vec3& begin,
+    const Vec3& end,
+    float width) {
+    const Vec3 direction = normalize(end - begin);
+    Vec3 side = cross(direction, {0.0F, 1.0F, 0.0F});
+    if (lengthSquared(side) < 1.0e-5F) {
+        side = {1.0F, 0.0F, 0.0F};
+    }
+    side = normalize(side) * width;
+    const Vec3 other = normalize(cross(direction, side)) * width * 0.72F;
+    const Vec3 beginA = begin + side;
+    const Vec3 beginB = begin - side;
+    const Vec3 endA = end + side * 0.55F;
+    const Vec3 endB = end - side * 0.55F;
+    const Vec3 beginC = begin + other;
+    const Vec3 beginD = begin - other;
+    const Vec3 endC = end + other * 0.55F;
+    const Vec3 endD = end - other * 0.55F;
+    appendTriangle(mesh, beginA, endA, beginB, 0.0F);
+    appendTriangle(mesh, beginB, endA, endB, 0.0F);
+    appendTriangle(mesh, beginC, beginD, endC, 0.0F);
+    appendTriangle(mesh, beginD, endD, endC, 0.0F);
+}
+
 RenderMesh createBroadleafPrototype() {
     RenderMesh mesh;
     constexpr int sides = 7;
@@ -163,9 +190,20 @@ RenderMesh createBroadleafPrototype() {
         appendTriangle(mesh, bottom0, top0, top1, 0.0F);
     }
 
-    appendCanopyCluster(mesh, {0.0F, 0.72F, 0.0F}, {0.72F, 0.30F, 0.72F});
-    appendCanopyCluster(mesh, {0.34F, 0.58F, 0.06F}, {0.48F, 0.25F, 0.48F});
-    appendCanopyCluster(mesh, {-0.30F, 0.61F, -0.14F}, {0.45F, 0.24F, 0.45F});
+    const Vec3 branchBase = {0.0F, 0.42F, 0.0F};
+    const Vec3 trunkCenter = {0.0F, 0.72F, 0.0F};
+    const Vec3 rightCluster = {0.34F, 0.61F, 0.06F};
+    const Vec3 leftCluster = {-0.30F, 0.64F, -0.14F};
+    const Vec3 backCluster = {0.02F, 0.67F, -0.34F};
+    appendBranch(mesh, branchBase, trunkCenter, 0.035F);
+    appendBranch(mesh, branchBase, rightCluster, 0.030F);
+    appendBranch(mesh, branchBase, leftCluster, 0.030F);
+    appendBranch(mesh, {0.0F, 0.48F, 0.0F}, backCluster, 0.026F);
+    appendCanopyCluster(mesh, trunkCenter, {0.72F, 0.30F, 0.72F});
+    appendCanopyCluster(mesh, rightCluster, {0.48F, 0.25F, 0.48F});
+    appendCanopyCluster(mesh, leftCluster, {0.45F, 0.24F, 0.45F});
+    appendCanopyCluster(mesh, backCluster, {0.38F, 0.22F, 0.38F});
+    appendCanopyCluster(mesh, {0.12F, 0.88F, 0.08F}, {0.34F, 0.19F, 0.34F});
     mesh.bounds = {
         {-1.0F, 0.0F, -1.0F},
         {1.0F, 1.0F, 1.0F},
@@ -200,6 +238,7 @@ VegetationScene buildVegetationScene(
     const int gridSize = static_cast<int>(
         std::ceil(world.sizeMeters / settings.spacingMeters));
     const float halfSize = world.sizeMeters * 0.5F;
+    const Noise2D forestNoise(world.seed ^ 0x8b2f71c9d451e306ULL);
     scene.instances.reserve(
         static_cast<std::size_t>(gridSize) * static_cast<std::size_t>(gridSize) / 2);
 
@@ -242,7 +281,14 @@ VegetationScene buildVegetationScene(
                 settings.minimumSlopeNormalY,
                 0.72F,
                 normalY);
-            const float density = 0.88F * altitudeDensity * (0.60F + slopeDensity * 0.40F);
+            const float forestField =
+                forestNoise.fbm(x * 0.0021F, z * 0.0021F, 4);
+            const float standDensity =
+                smoothstep(-0.12F, 0.24F, forestField);
+            const float density =
+                0.96F * altitudeDensity *
+                (0.60F + slopeDensity * 0.40F) *
+                (0.28F + standDensity * 0.96F);
             if (unitHash(cellSeed ^ 0x33ULL) > density) {
                 continue;
             }
