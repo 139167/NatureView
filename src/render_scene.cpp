@@ -157,10 +157,17 @@ RenderScene buildRenderScene(
                         (x + halfSize) / world.sizeMeters,
                         (z + halfSize) / world.sizeMeters,
                     };
+                    const float riverDistance =
+                        std::abs(x - world.riverXAt(z));
+                    const float wetness = 1.0F - smoothstep(
+                        world.riverHalfWidthAt(z) + 1.0F,
+                        world.riverHalfWidthAt(z) + 26.0F,
+                        riverDistance);
                     chunk.mesh.vertices.push_back({
                         position,
                         terrainNormal(world, x, z),
                         uv,
+                        wetness,
                     });
                     includePoint(chunk.mesh.bounds, position);
                 }
@@ -213,11 +220,13 @@ RenderScene buildRenderScene(
             leftPosition,
             {0.0F, 1.0F, 0.0F},
             {0.0F, v},
+            1.0F,
         });
         scene.river.vertices.push_back({
             rightPosition,
             {0.0F, 1.0F, 0.0F},
             {1.0F, v},
+            1.0F,
         });
         includePoint(scene.river.bounds, leftPosition);
         includePoint(scene.river.bounds, rightPosition);

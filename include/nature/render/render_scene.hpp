@@ -17,6 +17,7 @@ struct RenderVertex {
     Vec3 position;
     Vec3 normal;
     Vec2 uv;
+    float auxiliary = 0.0F;
 };
 
 struct RenderMesh {

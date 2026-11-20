@@ -385,6 +385,9 @@ MTLVertexDescriptor* createTerrainVertexDescriptor() {
     vertexDescriptor.attributes[2].format = MTLVertexFormatFloat2;
     vertexDescriptor.attributes[2].offset = offsetof(RenderVertex, uv);
     vertexDescriptor.attributes[2].bufferIndex = 0;
+    vertexDescriptor.attributes[3].format = MTLVertexFormatFloat;
+    vertexDescriptor.attributes[3].offset = offsetof(RenderVertex, auxiliary);
+    vertexDescriptor.attributes[3].bufferIndex = 0;
     vertexDescriptor.layouts[0].stride = sizeof(RenderVertex);
     return vertexDescriptor;
 }
