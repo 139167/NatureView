@@ -33,6 +33,7 @@ else()
 endif()
 
 add_library(nature_preview
+    src/material_textures.cpp
     src/preview_renderer.cpp
     src/render_scene.cpp
     src/vegetation_scene.cpp
@@ -191,6 +192,10 @@ if(BUILD_TESTING)
     add_executable(vegetation_tests tests/vegetation_tests.cpp)
     target_link_libraries(vegetation_tests PRIVATE nature_preview)
     add_test(NAME vegetation_tests COMMAND vegetation_tests)
+
+    add_executable(material_texture_tests tests/material_texture_tests.cpp)
+    target_link_libraries(material_texture_tests PRIVATE nature_preview)
+    add_test(NAME material_texture_tests COMMAND material_texture_tests)
 
     if(WIN32)
         add_test(NAME dx12_probe COMMAND natureview_dx12_probe)

@@ -23,6 +23,7 @@
 #include "nature/core/math.hpp"
 #include "nature/core/simulation.hpp"
 #include "nature/render/preview_renderer.hpp"
+#include "nature/render/material_textures.hpp"
 #include "nature/render/render_scene.hpp"
 #include "nature/render/vegetation_scene.hpp"
 
@@ -503,6 +504,26 @@ id<MTLTexture> createShadowTexture(id<MTLDevice> device) {
     return [device newTextureWithDescriptor:descriptor];
 }
 
+id<MTLTexture> createMaterialTexture(
+    id<MTLDevice> device,
+    const Texture2DRgba8& source) {
+    MTLTextureDescriptor* descriptor = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                     width:source.width
+                                    height:source.height
+                                 mipmapped:NO];
+    descriptor.usage = MTLTextureUsageShaderRead;
+    descriptor.storageMode = MTLStorageModeShared;
+    id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor];
+    if (texture != nil) {
+        [texture replaceRegion:MTLRegionMake2D(0, 0, source.width, source.height)
+                   mipmapLevel:0
+                     withBytes:source.pixels.data()
+                   bytesPerRow:source.width * 4];
+    }
+    return texture;
+}
+
 }  // namespace
 
 int runMetalApp(const MetalAppOptions& options) {
@@ -626,6 +647,18 @@ int runMetalApp(const MetalAppOptions& options) {
         }
 
         NatureSimulation simulation(options.seed);
+        const MaterialTextureSet materialTextures =
+            generateMaterialTextures(options.seed, 256);
+        id<MTLTexture> grassTexture =
+            createMaterialTexture(device, materialTextures.grass);
+        id<MTLTexture> rockTexture =
+            createMaterialTexture(device, materialTextures.rock);
+        id<MTLTexture> barkTexture =
+            createMaterialTexture(device, materialTextures.bark);
+        if (grassTexture == nil || rockTexture == nil || barkTexture == nil) {
+            std::cerr << "Failed to upload material textures\n";
+            return 1;
+        }
         constexpr double simulationFramesPerSecond = 60.0;
         const int prewarmFrames = static_cast<int>(
             std::ceil(options.prewarmSeconds * simulationFramesPerSecond));
@@ -930,6 +963,9 @@ int runMetalApp(const MetalAppOptions& options) {
                 [encoder setFragmentTexture:shadowTexture atIndex:1];
                 [encoder setFragmentTexture:reflectionColorHistory atIndex:2];
                 [encoder setFragmentTexture:reflectionDepthHistory atIndex:3];
+                [encoder setFragmentTexture:grassTexture atIndex:4];
+                [encoder setFragmentTexture:rockTexture atIndex:5];
+                [encoder setFragmentTexture:barkTexture atIndex:6];
                 [encoder drawPrimitives:MTLPrimitiveTypeTriangle
                             vertexStart:0
                             vertexCount:3];
@@ -1020,6 +1056,9 @@ int runMetalApp(const MetalAppOptions& options) {
                 [waterEncoder setFragmentTexture:shadowTexture atIndex:1];
                 [waterEncoder setFragmentTexture:reflectionColorHistory atIndex:2];
                 [waterEncoder setFragmentTexture:reflectionDepthHistory atIndex:3];
+                [waterEncoder setFragmentTexture:grassTexture atIndex:4];
+                [waterEncoder setFragmentTexture:rockTexture atIndex:5];
+                [waterEncoder setFragmentTexture:barkTexture atIndex:6];
                 FrameUniforms riverUniforms = frameUniforms(
                     simulation,
                     aspectRatio,

@@ -740,7 +740,10 @@ fragment float4 terrainFragment(
     constant Uniforms& uniforms [[buffer(1)]],
     depth2d<float> shadowMap [[texture(1)]],
     texture2d<float> reflectionColor [[texture(2)]],
-    depth2d<float> reflectionDepth [[texture(3)]])
+    depth2d<float> reflectionDepth [[texture(3)]],
+    texture2d<float> grassTexture [[texture(4)]],
+    texture2d<float> rockTexture [[texture(5)]],
+    texture2d<float> barkTexture [[texture(6)]])
 {
     float3 sunDirection = normalize(uniforms.sunDirection.xyz);
     float distanceToCamera = length(in.worldPosition - uniforms.cameraPosition.xyz);
@@ -755,6 +758,15 @@ fragment float4 terrainFragment(
             float3(0.055, 0.034, 0.020),
             float3(0.130, 0.082, 0.048),
             in.uv.y);
+        constexpr sampler materialSampler(
+            coord::normalized,
+            address::repeat,
+            filter::linear);
+        float2 barkUv = float2(
+            dot(in.worldPosition.xz, float2(0.75, 0.66)) * 0.12,
+            in.worldPosition.y * 0.16);
+        float barkDetail = barkTexture.sample(materialSampler, barkUv).r;
+        bark *= 0.62 + barkDetail * 0.76;
         float needleScale = 2.4;
         float needleFootprint =
             max(fwidth(in.worldPosition.x * needleScale),
@@ -979,6 +991,26 @@ fragment float4 terrainFragment(
             float3(0.090, 0.078, 0.063),
             float3(0.29, 0.27, 0.21),
             fine * 0.72 + micro * 0.28);
+        constexpr sampler materialSampler(
+            coord::normalized,
+            address::repeat,
+            filter::linear);
+        float materialDetailFade =
+            1.0 - smoothstep(45.0, 520.0, distanceToCamera);
+        float grassTexel = grassTexture.sample(
+            materialSampler,
+            ground * 0.075).g;
+        float rockTexel = rockTexture.sample(
+            materialSampler,
+            ground * 0.055).r;
+        vegetation *= mix(
+            1.0,
+            0.72 + grassTexel * 0.62,
+            materialDetailFade);
+        stone *= mix(
+            1.0,
+            0.65 + rockTexel * 0.72,
+            materialDetailFade);
         color = mix(vegetation, stone, saturate(rock));
 
         float snow = smoothstep(1060.0, 1220.0, in.worldPosition.y) *
